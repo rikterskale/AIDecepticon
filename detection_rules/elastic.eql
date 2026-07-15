@@ -1,0 +1,3 @@
+sequence by correlation_id with maxspan=15m
+  [any where event.dataset == "deceptionflow" and deception.event_type in ("lure_read", "lure_discovered")]
+  [any where event.dataset == "deceptionflow" and deception.event_type in ("token_presented", "authentication_attempt")]

@@ -1,0 +1,3 @@
+index=deceptionflow (event_type="token_presented" OR event_type="authentication_attempt")
+| stats earliest(_time) as first_seen latest(_time) as last_seen count values(lure_id) as lures values(event_type) as event_types by correlation_id source_ip actor_id session_id
+| eval severity=if(mvcount(lures)>1 OR mvcount(event_types)>1,"critical","high")

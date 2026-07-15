@@ -1,0 +1,13 @@
+// DeceptionFlow critical lure activation
+// Adapt table and field names to the configured ingestion path.
+DeceptionFlow_CL
+| where TimeGenerated > ago(24h)
+| where event_type_s in ("token_presented", "authentication_attempt")
+| summarize
+    FirstSeen=min(TimeGenerated),
+    LastSeen=max(TimeGenerated),
+    EventCount=count(),
+    Lures=make_set(lure_id_s),
+    EventTypes=make_set(event_type_s)
+  by correlation_id_s, source_ip_s, actor_id_s, session_id_s
+| extend Severity = iff(array_length(Lures) > 1 or array_length(EventTypes) > 1, "Critical", "High")

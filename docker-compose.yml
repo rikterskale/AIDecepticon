@@ -1,0 +1,14 @@
+services:
+  deceptionflow:
+    build: .
+    container_name: deceptionflow
+    environment:
+      DECEPTIONFLOW_DATABASE_PATH: ${DECEPTIONFLOW_DATABASE_PATH:-/data/deceptionflow.db}
+      DECEPTIONFLOW_LOG_LEVEL: ${DECEPTIONFLOW_LOG_LEVEL:-INFO}
+      DECEPTIONFLOW_PUBLIC_BASE_URL: ${DECEPTIONFLOW_PUBLIC_BASE_URL:-http://localhost:8080}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      - ./reports:/app/reports
+    restart: unless-stopped

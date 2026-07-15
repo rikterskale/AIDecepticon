@@ -1,0 +1,38 @@
+id: DF-CRED-001
+name: Synthetic deployment API key
+description: Obvious nonfunctional credential placed on a likely filesystem reconnaissance path.
+class: honeytoken
+placement_type: filesystem
+template: production_access_note
+trigger_type: http_callback
+severity_on_trigger: critical
+content: |
+  # Production Deployment Access
+
+  This file is a controlled DeceptionFlow artifact used for authorized monitoring.
+
+  DEPLOYMENT_API_KEY={{LURE_ID}}
+  TOKEN_VALIDATION_ENDPOINT={{TRIGGER_URL}}
+
+  Any attempt to use this synthetic token is logged as security telemetry. The
+  token does not authenticate to a real service and provides no system access.
+safety:
+  authenticates_to_real_service: false
+  contains_real_data: false
+  permits_lateral_movement: false
+  callback_metadata_only: true
+operations:
+  owner: purple-team
+  ttl_days: 30
+  validation_interval_hours: 24
+  cleanup_required: true
+telemetry:
+  required_fields:
+    - lure_id
+    - timestamp
+    - event_type
+    - source_ip
+    - correlation_id
+metadata:
+  paired_asset_class: application_configuration
+  environment: lab
