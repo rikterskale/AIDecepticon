@@ -174,23 +174,6 @@ Use repeated trials and record at least:
 
 Do not label an interaction as AI-generated solely from a user agent or request speed. Strong attribution should use agent traces, tool-call IDs, workload identity, session correlation, and semantic reuse of lure content.
 
-## GitHub import
-
-1. Create a new empty repository on GitHub.
-2. Extract this package locally.
-3. Run:
-
-```bash
-git init
-git add .
-git commit -m "Initial DeceptionFlow MVP"
-git branch -M main
-git remote add origin https://github.com/YOUR-ORG/deceptionflow.git
-git push -u origin main
-```
-
-Alternatively, use GitHub's **Import repository** workflow after first placing this source in any Git-accessible repository.
-
 ## Production hardening backlog
 
 - PostgreSQL repository and migrations.
