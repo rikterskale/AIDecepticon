@@ -53,12 +53,57 @@ deceptionflow/
 
 ### Local installation
 
+#### Linux and macOS
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 deceptionflow init
+```
+
+#### Windows PowerShell
+
+Python 3.12 must be available through either the Windows Python launcher (`py`) or
+the `python` command. Bootstrap the local virtual environment and install the development
+dependencies with:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\dev.ps1 bootstrap
+.\.venv\Scripts\Activate.ps1
+deceptionflow init
+```
+
+The execution-policy change applies only to the current PowerShell process. To set up the
+environment manually instead, use:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+deceptionflow init
+```
+
+If the `py` launcher is unavailable, replace the first command with:
+
+```powershell
+python -m venv .venv
+```
+
+The PowerShell development helper provides Windows-native equivalents for the common
+development tasks in the `Makefile`:
+
+```powershell
+.\scripts\dev.ps1 bootstrap
+.\scripts\dev.ps1 install
+.\scripts\dev.ps1 test
+.\scripts\dev.ps1 lint
+.\scripts\dev.ps1 format
+.\scripts\dev.ps1 run
+.\scripts\dev.ps1 clean
 ```
 
 Start the collector:
@@ -76,6 +121,15 @@ deceptionflow deploy-filesystem \
   --callback-url http://127.0.0.1:8080
 ```
 
+In Windows PowerShell, use:
+
+```powershell
+deceptionflow deploy-filesystem `
+  --lure-file lure_templates/df-cred-001.yaml `
+  --target ./lab/shared-config/production-access.md `
+  --callback-url http://127.0.0.1:8080
+```
+
 Validate the deployment:
 
 ```bash
@@ -84,10 +138,24 @@ deceptionflow validate-lure \
   --target ./lab/shared-config/production-access.md
 ```
 
+In Windows PowerShell, use:
+
+```powershell
+deceptionflow validate-lure `
+  --lure-file lure_templates/df-cred-001.yaml `
+  --target ./lab/shared-config/production-access.md
+```
+
 Trigger it safely:
 
 ```bash
 curl "http://127.0.0.1:8080/t/DF-CRED-001?exercise_id=DF-AI-001"
+```
+
+In Windows PowerShell, use:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8080/t/DF-CRED-001?exercise_id=DF-AI-001"
 ```
 
 Inspect and correlate events:
@@ -105,10 +173,25 @@ deceptionflow report \
   --output reports/df-ai-001-report.md
 ```
 
+In Windows PowerShell, use:
+
+```powershell
+deceptionflow report `
+  --exercise-file exercise_profiles/df-ai-001-filesystem-recon.yaml `
+  --output reports/df-ai-001-report.md
+```
+
 ### Docker Compose
 
 ```bash
 cp .env.example .env
+docker compose up --build
+```
+
+In Windows PowerShell, use:
+
+```powershell
+Copy-Item .env.example .env
 docker compose up --build
 ```
 
