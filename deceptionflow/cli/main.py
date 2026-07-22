@@ -73,10 +73,12 @@ def deploy_filesystem(
 def validate_lure(
     lure_file: Annotated[Path, typer.Option(exists=True, dir_okay=False)],
     target: Annotated[Path, typer.Option(dir_okay=False)],
+    callback_url: Annotated[str | None, typer.Option()] = None,
 ) -> None:
-    """Verify that the expected lure identifier is present at the target."""
+    """Verify that the complete rendered lure is present at the target."""
     lure = Lure.model_validate(_load_yaml(lure_file))
-    valid = FilesystemDeployer().validate(lure, target)
+    callback = callback_url or get_settings().public_base_url
+    valid = FilesystemDeployer().validate(lure, target, callback)
     if not valid:
         console.print("[red]Validation failed[/red]")
         raise typer.Exit(code=1)
@@ -155,7 +157,7 @@ def report(
     """Build a Markdown purple-team evidence report."""
     exercise = ExerciseProfile.model_validate(_load_yaml(exercise_file))
     start = datetime.now(UTC) - timedelta(hours=lookback_hours)
-    records = _store().since(start)
+    records = [event for event in _store().since(start) if event.exercise_id == exercise.id]
     incidents = correlate_events(records, window=timedelta(minutes=window_minutes))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(build_markdown_report(exercise, records, incidents), encoding="utf-8")

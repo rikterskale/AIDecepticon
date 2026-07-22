@@ -13,18 +13,23 @@ class DeploymentResult:
 
 
 class FilesystemDeployer:
+    @staticmethod
+    def render(lure: Lure, callback_url: str) -> str:
+        return (
+            lure.content.replace("{{LURE_ID}}", lure.id)
+            .replace("{{CALLBACK_URL}}", callback_url.rstrip("/"))
+            .replace("{{TRIGGER_URL}}", f"{callback_url.rstrip('/')}/t/{lure.id}")
+        )
+
     def deploy(self, lure: Lure, target: str | Path, callback_url: str) -> DeploymentResult:
         if lure.placement_type != PlacementType.FILESYSTEM:
             raise ValueError("FilesystemDeployer only accepts filesystem lures")
 
         target_path = Path(target)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        rendered = (
-            lure.content.replace("{{LURE_ID}}", lure.id)
-            .replace("{{CALLBACK_URL}}", callback_url.rstrip("/"))
-            .replace("{{TRIGGER_URL}}", f"{callback_url.rstrip('/')}/t/{lure.id}")
-        )
-        target_path.write_text(rendered, encoding="utf-8")
+        rendered = self.render(lure, callback_url)
+        with target_path.open("x", encoding="utf-8") as handle:
+            handle.write(rendered)
         return DeploymentResult(
             lure_id=lure.id,
             target=target_path,
@@ -32,12 +37,12 @@ class FilesystemDeployer:
             bytes_written=len(rendered.encode("utf-8")),
         )
 
-    def validate(self, lure: Lure, target: str | Path) -> bool:
+    def validate(self, lure: Lure, target: str | Path, callback_url: str) -> bool:
         target_path = Path(target)
         if not target_path.is_file():
             return False
         content = target_path.read_text(encoding="utf-8")
-        return lure.id in content
+        return content == self.render(lure, callback_url)
 
     def remove(self, target: str | Path) -> bool:
         target_path = Path(target)

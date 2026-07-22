@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_path: Path = Path("data/deceptionflow.db")
     log_level: str = "INFO"
     public_base_url: str = "http://localhost:8080"
+    trusted_proxy_ips: set[str] = set()
 
     model_config = SettingsConfigDict(
         env_prefix="DECEPTIONFLOW_",

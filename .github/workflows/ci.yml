@@ -21,8 +21,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install
+      - name: Install (Ubuntu)
+        if: runner.os == 'Linux'
         run: pip install -e ".[dev]"
+      - name: Bootstrap (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\dev.ps1 bootstrap
       - name: Lint (Ubuntu)
         if: runner.os == 'Linux'
         run: ruff check .

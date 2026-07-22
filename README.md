@@ -135,7 +135,8 @@ Validate the deployment:
 ```bash
 deceptionflow validate-lure \
   --lure-file lure_templates/df-cred-001.yaml \
-  --target ./lab/shared-config/production-access.md
+  --target ./lab/shared-config/production-access.md \
+  --callback-url http://127.0.0.1:8080
 ```
 
 In Windows PowerShell, use:
@@ -143,7 +144,8 @@ In Windows PowerShell, use:
 ```powershell
 deceptionflow validate-lure `
   --lure-file lure_templates/df-cred-001.yaml `
-  --target ./lab/shared-config/production-access.md
+  --target ./lab/shared-config/production-access.md `
+  --callback-url http://127.0.0.1:8080
 ```
 
 Trigger it safely:

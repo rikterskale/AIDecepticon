@@ -7,9 +7,14 @@ from deceptionflow.schemas.event import DeceptionEvent
 from deceptionflow.storage.sqlite import EventStore
 
 
-def create_app(store: EventStore | None = None) -> FastAPI:
+def create_app(
+    store: EventStore | None = None, trusted_proxy_ips: set[str] | None = None
+) -> FastAPI:
     settings = get_settings()
     event_store = store or EventStore(settings.database_path)
+    configured_trusted_proxy_ips = (
+        settings.trusted_proxy_ips if trusted_proxy_ips is None else trusted_proxy_ips
+    )
     application = FastAPI(
         title="DeceptionFlow Collector",
         version=__version__,
@@ -25,7 +30,7 @@ def create_app(store: EventStore | None = None) -> FastAPI:
         "/t/{lure_id}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
     )
     async def trigger(lure_id: str, request: Request) -> dict[str, str]:
-        event = build_http_event(lure_id, request)
+        event = build_http_event(lure_id, request, configured_trusted_proxy_ips)
         event_store.insert(event)
         return {"status": "recorded", "event_id": event.event_id}
 
