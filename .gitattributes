@@ -3,11 +3,17 @@
 
 .gitattributes text eol=lf
 .gitignore text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf
+LICENSE text eol=lf
 *.py text eol=lf
 *.toml text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
 *.md text eol=lf
+*.eql text eol=lf
+*.kql text eol=lf
+*.spl text eol=lf
 Dockerfile text eol=lf
 Makefile text eol=lf
 

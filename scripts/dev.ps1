@@ -61,7 +61,8 @@ try {
                 "pytest",
                 "--basetemp=.pytest-tmp",
                 "--cov=deceptionflow",
-                "--cov-report=term-missing"
+                "--cov-report=term-missing",
+                "--cov-fail-under=85"
             )
         }
         "lint" {

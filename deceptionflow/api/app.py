@@ -1,14 +1,15 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import IPvAnyNetwork
 
 from deceptionflow import __version__
 from deceptionflow.collectors.http import build_http_event
 from deceptionflow.config import get_settings
 from deceptionflow.schemas.event import DeceptionEvent
-from deceptionflow.storage.sqlite import EventStore
+from deceptionflow.storage.sqlite import DuplicateEventError, EventStore
 
 
 def create_app(
-    store: EventStore | None = None, trusted_proxy_ips: set[str] | None = None
+    store: EventStore | None = None, trusted_proxy_ips: list[IPvAnyNetwork] | None = None
 ) -> FastAPI:
     settings = get_settings()
     event_store = store or EventStore(settings.database_path)
@@ -36,7 +37,10 @@ def create_app(
 
     @application.post("/api/v1/events", response_model=DeceptionEvent, status_code=201)
     def ingest_event(event: DeceptionEvent) -> DeceptionEvent:
-        return event_store.insert(event)
+        try:
+            return event_store.insert(event)
+        except DuplicateEventError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @application.get("/api/v1/events", response_model=list[DeceptionEvent])
     def list_events(limit: int = 100) -> list[DeceptionEvent]:

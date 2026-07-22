@@ -139,6 +139,32 @@ deceptionflow validate-lure \
   --callback-url http://127.0.0.1:8080
 ```
 
+Deployment refuses an existing target by default. To intentionally replace one, pass
+`--overwrite`; DeceptionFlow preserves the previous file beside it with a `.bak` suffix.
+
+Remove an unchanged lure safely:
+
+```bash
+deceptionflow remove-lure \
+  --lure-file lure_templates/df-cred-001.yaml \
+  --target ./lab/shared-config/production-access.md \
+  --callback-url http://127.0.0.1:8080
+```
+
+Removal is refused if the target no longer exactly matches the rendered lure.
+
+In Windows PowerShell, use:
+
+```powershell
+deceptionflow remove-lure `
+  --lure-file lure_templates/df-cred-001.yaml `
+  --target ./lab/shared-config/production-access.md `
+  --callback-url http://127.0.0.1:8080
+```
+
+Lures receive a timezone-aware expiration derived from `operations.created_at` and `ttl_days`
+unless `expires_at` is explicitly provided. Deployment refuses expired lures.
+
 In Windows PowerShell, use:
 
 ```powershell
@@ -189,6 +215,33 @@ deceptionflow report `
 cp .env.example .env
 docker compose up --build
 ```
+
+## Reverse proxies
+
+DeceptionFlow ignores `X-Forwarded-For` unless the direct client belongs to an explicitly
+trusted IP address or CIDR network. Configure trusted proxies as a JSON array:
+
+```dotenv
+DECEPTIONFLOW_TRUSTED_PROXY_IPS=["127.0.0.1/32","10.20.0.0/16"]
+```
+
+Use the narrowest possible networks. Do not add a public client network or `0.0.0.0/0`.
+With Docker Compose, place the value in `.env`; the Compose service passes it to the collector.
+
+## Windows troubleshooting
+
+- **`py` is not recognized:** install Python 3.12 from python.org with the launcher enabled,
+  or place `python` on `PATH` and use `python -m venv .venv`.
+- **PowerShell blocks scripts:** run `Set-ExecutionPolicy -Scope Process Bypass`. This changes
+  policy only for the current PowerShell process.
+- **The virtual environment is damaged:** remove `.venv`, then run
+  `.\scripts\dev.ps1 bootstrap` again.
+- **Port 8080 is already occupied:** stop the conflicting process or run
+  `deceptionflow serve --port 8081` and use the same port in callback URLs.
+- **Docker commands fail:** start Docker Desktop, select Linux containers, and wait until
+  `docker version` reports a running server.
+- **Tests cannot use the Windows temp directory:** use `.\scripts\dev.ps1 test`; it keeps
+  pytest temporary files inside the repository.
 
 In Windows PowerShell, use:
 

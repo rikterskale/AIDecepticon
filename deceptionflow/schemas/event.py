@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventType(StrEnum):
@@ -18,11 +18,13 @@ class EventType(StrEnum):
 
 
 class DeceptionEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     lure_id: str
     exercise_id: str | None = None
-    event_type: EventType
+    event_type: EventType = Field(strict=False)
     source_ip: str | None = None
     actor_id: str | None = None
     workload_identity: str | None = None

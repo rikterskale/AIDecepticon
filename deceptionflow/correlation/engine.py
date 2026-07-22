@@ -19,6 +19,18 @@ class CorrelatedIncident(BaseModel):
     reasons: list[str]
 
 
+def _event_identities(event: DeceptionEvent) -> list[str]:
+    values = [
+        ("correlation", event.correlation_id),
+        ("session", event.session_id),
+        ("tool_call", event.tool_call_id),
+        ("workload", event.workload_identity),
+        ("actor", event.actor_id),
+        ("source", event.source_ip),
+    ]
+    return [f"{identity_type}:{value}" for identity_type, value in values if value]
+
+
 def _event_key(event: DeceptionEvent) -> str:
     return (
         event.correlation_id
@@ -34,12 +46,36 @@ def _event_key(event: DeceptionEvent) -> str:
 def correlate_events(
     events: list[DeceptionEvent], window: timedelta = timedelta(minutes=15)
 ) -> list[CorrelatedIncident]:
-    grouped: dict[str, list[DeceptionEvent]] = defaultdict(list)
-    for event in sorted(events, key=lambda item: item.timestamp):
-        grouped[_event_key(event)].append(event)
+    ordered = sorted(events, key=lambda item: item.timestamp)
+    parents = list(range(len(ordered)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    identity_owner: dict[str, int] = {}
+    for index, event in enumerate(ordered):
+        for identity in _event_identities(event):
+            if identity in identity_owner:
+                union(index, identity_owner[identity])
+            else:
+                identity_owner[identity] = index
+
+    grouped: dict[int, list[DeceptionEvent]] = defaultdict(list)
+    for index, event in enumerate(ordered):
+        grouped[find(index)].append(event)
 
     incidents: list[CorrelatedIncident] = []
-    for key, group in grouped.items():
+    for group in grouped.values():
+        key = _event_key(group[0])
         current: list[DeceptionEvent] = []
         for event in group:
             if current and event.timestamp - current[-1].timestamp > window:

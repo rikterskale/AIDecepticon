@@ -33,7 +33,7 @@ jobs:
         run: ruff check .
       - name: Test (Ubuntu)
         if: runner.os == 'Linux'
-        run: pytest --cov=deceptionflow --cov-report=term-missing
+        run: pytest --cov=deceptionflow --cov-report=term-missing --cov-fail-under=85
       - name: Lint (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -42,3 +42,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\scripts\dev.ps1 test
+      - name: Validate Docker Compose (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: docker compose config --quiet
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start Docker Compose
+        run: docker compose up --build --detach
+      - name: Wait for collector health
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs
+          exit 1
+      - name: Stop Docker Compose
+        if: always()
+        run: docker compose down --volumes

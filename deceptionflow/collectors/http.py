@@ -1,17 +1,29 @@
+from ipaddress import ip_address
+
 from fastapi import Request
+from pydantic import IPvAnyNetwork
 
 from deceptionflow.schemas.event import DeceptionEvent, EventType
 
 
 def build_http_event(
-    lure_id: str, request: Request, trusted_proxy_ips: set[str] | None = None
+    lure_id: str, request: Request, trusted_proxy_ips: list[IPvAnyNetwork] | None = None
 ) -> DeceptionEvent:
     query = request.query_params
     direct_source_ip = request.client.host if request.client else None
     forwarded_for = request.headers.get("x-forwarded-for")
     source_ip = direct_source_ip
-    if forwarded_for and direct_source_ip in (trusted_proxy_ips or set()):
-        source_ip = forwarded_for.split(",")[0].strip()
+    if forwarded_for and direct_source_ip:
+        try:
+            direct_address = ip_address(direct_source_ip)
+        except ValueError:
+            direct_address = None
+        if direct_address and any(direct_address in network for network in trusted_proxy_ips or []):
+            forwarded_source = forwarded_for.split(",")[0].strip()
+            try:
+                source_ip = str(ip_address(forwarded_source))
+            except ValueError:
+                source_ip = direct_source_ip
 
     reserved = {
         "exercise_id",

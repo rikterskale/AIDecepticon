@@ -32,3 +32,17 @@ def test_real_authentication_is_rejected() -> None:
     data["safety"]["authenticates_to_real_service"] = True
     with pytest.raises(ValueError, match="Unsafe lure configuration"):
         Lure.model_validate(data)
+
+
+def test_unknown_lure_field_is_rejected() -> None:
+    data = safe_lure()
+    data["unexpected"] = True
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        Lure.model_validate(data)
+
+
+def test_lure_does_not_coerce_policy_types() -> None:
+    data = safe_lure()
+    data["operations"] = {"ttl_days": "30"}
+    with pytest.raises(ValueError, match="valid integer"):
+        Lure.model_validate(data)

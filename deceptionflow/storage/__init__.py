@@ -1,3 +1,3 @@
-from deceptionflow.storage.sqlite import EventStore
+from deceptionflow.storage.sqlite import DuplicateEventError, EventStore
 
-__all__ = ["EventStore"]
+__all__ = ["DuplicateEventError", "EventStore"]

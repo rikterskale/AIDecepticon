@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
@@ -9,6 +10,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from deceptionflow import __version__
 from deceptionflow.config import get_settings
 from deceptionflow.correlation.engine import correlate_events
 from deceptionflow.deployers.filesystem import FilesystemDeployer
@@ -22,8 +24,11 @@ console = Console()
 
 
 def _load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except yaml.YAMLError as error:
+        raise ValueError(f"Invalid YAML in {path}: {error}") from error
     if not isinstance(data, dict):
         raise typer.BadParameter(f"Expected a YAML object in {path}")
     return data
@@ -33,13 +38,22 @@ def _store() -> EventStore:
     return EventStore(get_settings().database_path)
 
 
+def _fail(message: str) -> None:
+    console.print(f"[red]Error:[/red] {message}")
+    raise typer.Exit(code=1)
+
+
 @app.command()
 def init() -> None:
     """Initialize local data and report directories."""
     settings = get_settings()
-    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
-    Path("reports").mkdir(parents=True, exist_ok=True)
-    EventStore(settings.database_path)
+    try:
+        settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+        Path("reports").mkdir(parents=True, exist_ok=True)
+        EventStore(settings.database_path)
+    except (OSError, sqlite3.Error) as error:
+        _fail(str(error))
+        return
     console.print(f"[green]Initialized[/green] database at {settings.database_path}")
 
 
@@ -58,15 +72,24 @@ def deploy_filesystem(
     lure_file: Annotated[Path, typer.Option(exists=True, dir_okay=False)],
     target: Annotated[Path, typer.Option(dir_okay=False)],
     callback_url: Annotated[str | None, typer.Option()] = None,
+    overwrite: Annotated[
+        bool, typer.Option(help="Replace the target after creating a .bak backup.")
+    ] = False,
 ) -> None:
     """Deploy a safe, synthetic filesystem lure."""
-    lure = Lure.model_validate(_load_yaml(lure_file))
-    callback = callback_url or get_settings().public_base_url
-    result = FilesystemDeployer().deploy(lure, target, callback)
+    try:
+        lure = Lure.model_validate(_load_yaml(lure_file))
+        callback = callback_url or get_settings().public_base_url
+        result = FilesystemDeployer().deploy(lure, target, callback, overwrite=overwrite)
+    except (OSError, ValueError) as error:
+        _fail(str(error))
+        return
     console.print(
         f"[green]Deployed[/green] {result.lure_id} to {result.target} "
         f"({result.bytes_written} bytes)"
     )
+    if result.backup_path:
+        console.print(f"[yellow]Backup written[/yellow] to {result.backup_path}")
 
 
 @app.command("validate-lure")
@@ -76,13 +99,38 @@ def validate_lure(
     callback_url: Annotated[str | None, typer.Option()] = None,
 ) -> None:
     """Verify that the complete rendered lure is present at the target."""
-    lure = Lure.model_validate(_load_yaml(lure_file))
-    callback = callback_url or get_settings().public_base_url
-    valid = FilesystemDeployer().validate(lure, target, callback)
+    try:
+        lure = Lure.model_validate(_load_yaml(lure_file))
+        callback = callback_url or get_settings().public_base_url
+        valid = FilesystemDeployer().validate(lure, target, callback)
+    except (OSError, ValueError) as error:
+        _fail(str(error))
+        return
     if not valid:
         console.print("[red]Validation failed[/red]")
         raise typer.Exit(code=1)
     console.print("[green]Validation passed[/green]")
+
+
+@app.command("remove-lure")
+def remove_lure(
+    lure_file: Annotated[Path, typer.Option(exists=True, dir_okay=False)],
+    target: Annotated[Path, typer.Option(dir_okay=False)],
+    callback_url: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Remove a lure only when the target exactly matches the expected artifact."""
+    try:
+        lure = Lure.model_validate(_load_yaml(lure_file))
+        callback = callback_url or get_settings().public_base_url
+        deployer = FilesystemDeployer()
+        if not deployer.validate(lure, target, callback):
+            _fail("Refusing to remove a missing or modified lure")
+            return
+        deployer.remove(target)
+    except (OSError, ValueError) as error:
+        _fail(str(error))
+        return
+    console.print(f"[green]Removed[/green] {lure.id} from {target}")
 
 
 @app.command("events")
@@ -91,7 +139,11 @@ def events(
     as_json: bool = typer.Option(False, "--json", help="Print normalized JSON."),
 ) -> None:
     """Display recent deception events."""
-    records = _store().list(limit)
+    try:
+        records = _store().list(limit)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        _fail(str(error))
+        return
     if as_json:
         console.print_json(json.dumps([event.model_dump(mode="json") for event in records]))
         return
@@ -121,9 +173,13 @@ def correlate(
 ) -> None:
     """Correlate lure events using deterministic rules."""
     start = datetime.now(UTC) - timedelta(hours=lookback_hours)
-    incidents = correlate_events(
-        _store().since(start), window=timedelta(minutes=window_minutes)
-    )
+    try:
+        incidents = correlate_events(
+            _store().since(start), window=timedelta(minutes=window_minutes)
+        )
+    except (OSError, sqlite3.Error, ValueError) as error:
+        _fail(str(error))
+        return
     if as_json:
         console.print_json(json.dumps([item.model_dump() for item in incidents]))
         return
@@ -155,12 +211,24 @@ def report(
     window_minutes: int = typer.Option(15, min=1, max=1440),
 ) -> None:
     """Build a Markdown purple-team evidence report."""
-    exercise = ExerciseProfile.model_validate(_load_yaml(exercise_file))
-    start = datetime.now(UTC) - timedelta(hours=lookback_hours)
-    records = [event for event in _store().since(start) if event.exercise_id == exercise.id]
-    incidents = correlate_events(records, window=timedelta(minutes=window_minutes))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(build_markdown_report(exercise, records, incidents), encoding="utf-8")
+    try:
+        exercise = ExerciseProfile.model_validate(_load_yaml(exercise_file))
+        start = datetime.now(UTC) - timedelta(hours=lookback_hours)
+        records = [event for event in _store().since(start) if event.exercise_id == exercise.id]
+        incidents = correlate_events(records, window=timedelta(minutes=window_minutes))
+        output.parent.mkdir(parents=True, exist_ok=True)
+        provenance = {
+            "DeceptionFlow version": __version__,
+            "Database": str(get_settings().database_path.resolve()),
+            "Lookback hours": str(lookback_hours),
+            "Correlation window minutes": str(window_minutes),
+        }
+        output.write_text(
+            build_markdown_report(exercise, records, incidents, provenance), encoding="utf-8"
+        )
+    except (OSError, sqlite3.Error, ValueError) as error:
+        _fail(str(error))
+        return
     console.print(f"[green]Report written[/green] to {output}")
 
 

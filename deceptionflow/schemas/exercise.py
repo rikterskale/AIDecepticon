@@ -1,9 +1,11 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     name: str
     provider: str = "unspecified"
     family: str = "unspecified"
@@ -17,6 +19,8 @@ class ModelProfile(BaseModel):
 
 
 class ExerciseProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     name: str
     objective: str

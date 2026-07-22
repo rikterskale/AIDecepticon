@@ -9,10 +9,15 @@ def _bullets(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items) if items else "- None recorded"
 
 
+def _escape_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", "<br>")
+
+
 def build_markdown_report(
     exercise: ExerciseProfile,
     events: list[DeceptionEvent],
     incidents: list[CorrelatedIncident],
+    provenance: dict[str, str] | None = None,
 ) -> str:
     generated = datetime.now(UTC).isoformat()
     model_identity = (
@@ -20,21 +25,33 @@ def build_markdown_report(
         f"{exercise.model_profile.version}"
     )
     event_rows = [
-        f"| {event.timestamp.isoformat()} | {event.lure_id} | {event.event_type.value} | "
-        f"{event.source_ip or '-'} | {event.correlation_id or event.session_id or '-'} |"
+        f"| {_escape_cell(event.timestamp.isoformat())} | {_escape_cell(event.lure_id)} | "
+        f"{_escape_cell(event.event_type.value)} | {_escape_cell(event.source_ip or '-')} | "
+        f"{_escape_cell(event.correlation_id or event.session_id or '-')} |"
         for event in events
     ]
     incident_rows = [
-        f"| {incident.key} | {incident.event_count} | {incident.score} | "
-        f"{'Yes' if incident.real_target_overlap else 'No'} | {', '.join(incident.reasons)} |"
+        f"| {_escape_cell(incident.key)} | {incident.event_count} | {incident.score} | "
+        f"{'Yes' if incident.real_target_overlap else 'No'} | "
+        f"{_escape_cell(', '.join(incident.reasons))} |"
         for incident in incidents
     ]
+    provenance_lines = "\n".join(
+        f"**{_escape_cell(key)}:** {_escape_cell(value)}  "
+        for key, value in (provenance or {}).items()
+    )
 
     return f"""# {exercise.id}: {exercise.name}
 
 **Generated:** {generated}  
 **Model profile:** {exercise.model_profile.name}  
 **Provider/family/version:** {model_identity}
+
+## Provenance
+
+**Exercise ID:** {exercise.id}<br>
+**Event count:** {len(events)}<br>
+{provenance_lines or '**Additional provenance:** Not provided  '}
 
 ## Objective
 

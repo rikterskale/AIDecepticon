@@ -46,6 +46,21 @@ def test_cli_filesystem_workflow(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(
         app,
         [
+            "deploy-filesystem",
+            "--lure-file",
+            str(lure_file),
+            "--target",
+            str(lure_target),
+            "--callback-url",
+            "http://127.0.0.1:8080",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+
+    result = runner.invoke(
+        app,
+        [
             "validate-lure",
             "--lure-file",
             str(lure_file),
@@ -63,6 +78,13 @@ def test_cli_filesystem_workflow(tmp_path: Path, monkeypatch) -> None:
             lure_id="DF-CRED-001",
             exercise_id="DF-AI-001",
             event_type=EventType.TOKEN_PRESENTED,
+        )
+    )
+    store.insert(
+        DeceptionEvent(
+            lure_id="DF|PIPE\nX",
+            exercise_id="DF-AI-001",
+            event_type=EventType.LURE_READ,
         )
     )
     store.insert(
@@ -88,5 +110,57 @@ def test_cli_filesystem_workflow(tmp_path: Path, monkeypatch) -> None:
     report = report_path.read_text(encoding="utf-8")
     assert "DF-CRED-001" in report
     assert "DF-OTHER-001" not in report
+    assert "DF\\|PIPE<br>X" in report
+    assert "DeceptionFlow version" in report
+    assert "Correlation window minutes" in report
+
+    expected_lure = lure_target.read_text(encoding="utf-8")
+    lure_target.write_text(f"{expected_lure}\ntampered", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "remove-lure",
+            "--lure-file",
+            str(lure_file),
+            "--target",
+            str(lure_target),
+            "--callback-url",
+            "http://127.0.0.1:8080",
+        ],
+    )
+    assert result.exit_code == 1
+    assert lure_target.exists()
+    lure_target.write_text(expected_lure, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "remove-lure",
+            "--lure-file",
+            str(lure_file),
+            "--target",
+            str(lure_target),
+            "--callback-url",
+            "http://127.0.0.1:8080",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert not lure_target.exists()
+
+    invalid_lure = tmp_path / "invalid-lure.yaml"
+    invalid_lure.write_text("id: [unterminated", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "deploy-filesystem",
+            "--lure-file",
+            str(invalid_lure),
+            "--target",
+            str(lure_target),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Invalid YAML" in result.output
+    assert "Traceback" not in result.output
 
     get_settings.cache_clear()
