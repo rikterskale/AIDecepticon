@@ -5,7 +5,7 @@
 AIDecepticon is an open-source control plane for designing, deploying, and operating defensive deception across identity, cloud, endpoints, internal networks, zero-trust access, and AI infrastructure. The product is intentionally GUI-first: common operator journeys are guided from intent to safe deployment without requiring a CLI.
 
 > [!IMPORTANT]
-> This repository is an operational product foundation, not a drop-in replacement for a mature commercial deception platform. The GUI, API, persistence layer, canary beacons, incident workflow, packaging, and deployment model are implemented. Production projection sensors, cloud-provider controllers, endpoint installers, and response-provider adapters are the next engineering layer described in [the roadmap](#roadmap).
+> This repository is an operational product foundation, not yet a drop-in replacement for a mature commercial deception platform. The GUI, API, persistence layer, canary beacons, incident workflow, packaging, and projection-sensor MVP are implemented. Cloud-provider controllers, endpoint installers, and response-provider adapters are the next engineering layers described in [the roadmap](#roadmap).
 
 ## What is here
 
@@ -26,6 +26,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
 - Optional bearer-token protection for every mutating control-plane API.
+- A non-root Go projection sensor with one-time enrollment, signed commands, isolated HTTP/SSH/PostgreSQL/Redis/SMB/TCP decoys, and high-confidence telemetry.
 
 ## Product model
 
@@ -62,6 +63,7 @@ For a production-style local build on Windows PowerShell:
 ```powershell
 npm run build
 $env:NODE_ENV='production'
+$env:SENSOR_COMMAND_SIGNING_KEY='<at-least-32-random-bytes>'
 npm start
 ```
 
@@ -70,6 +72,7 @@ Then open `http://localhost:8787`.
 ### Docker
 
 ```bash
+export SENSOR_COMMAND_SIGNING_KEY="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
@@ -103,9 +106,17 @@ Implemented resources include:
 - `GET|POST /api/v1/tokens`
 - `GET|PATCH /api/v1/incidents`
 - `GET /api/v1/sensors`
+- `POST /api/v1/sensor-enrollment-tokens`
+- `POST /api/v1/sensors/enroll`
+- `POST /api/v1/sensors/{sensorId}/heartbeat`
+- `GET|POST /api/v1/sensors/{sensorId}/commands`
+- `POST /api/v1/sensors/{sensorId}/commands/{commandId}/ack`
+- `POST /api/v1/sensors/{sensorId}/events`
 - `GET /api/v1/domains`
 - `GET /api/v1/integrations`
 - `GET|POST /api/v1/beacon/{tokenId}`
+
+Projection sensors are enrolled entirely through **Protected surfaces → Add sensor**. The guided workflow creates a short-lived, single-use token and provides deployment commands. See [sensor/README.md](sensor/README.md) for the runtime security model and configuration reference.
 
 ## Development
 
@@ -115,7 +126,7 @@ npm test
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, and guided GUI deployment flow.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, and cross-language signing compatibility.
 
 ## Safety and scope
 
@@ -123,18 +134,9 @@ AIDecepticon is for authorized defensive security operations. Deception artifact
 
 ## Roadmap
 
-The current milestone establishes the product experience and control plane. The next implementation milestones are:
+The complete milestone plan—including projection sensors, production control-plane work, endpoint delivery, SOC integrations, multi-domain AD, cloud controllers, decoy runtime breadth, AI/GenAI deception, and enterprise operations—is maintained in [ROADMAP.md](ROADMAP.md).
 
-1. Signed projection sensor with mTLS enrollment, health, and remote lifecycle management.
-2. Pluggable decoy runtime for SSH, SMB, RDP, HTTP/S, database, OT/IoT, and custom service personas.
-3. Cloud-native AWS, Azure, and GCP controllers for IAM, secrets, storage, workloads, containers, and serverless.
-4. Windows, macOS, and Linux token builders plus GPO, MDM, and software-distribution packages.
-5. Multi-forest AD connector with scoped read access, honey-object lifecycle, and attack-specific detections.
-6. Production SIEM/SOAR/EDR adapters, STIX/TAXII export, quarantine approval policy, and signed playbooks.
-7. PostgreSQL, OIDC/SAML, fine-grained RBAC, immutable audit storage, HA, backups, and upgrade tooling.
-8. Safe AI recommendation service for environment-matched personas, placement, and agentic sequence analysis.
-
-Contributions should preserve three invariants: safe non-pivotable decoys, high-confidence signals, and a fully guided GUI path for every operator action.
+The active milestone is the projection-sensor MVP: secure enrollment, authenticated health and command channels, signed instructions, isolated decoy listeners, and interaction telemetry.
 
 ## License
 

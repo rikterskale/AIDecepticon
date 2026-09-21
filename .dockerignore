@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+dist
+runtime-data
+sensor/bin
+sensor/coverage.out
+sensor/sensor-state.json
+*.log

@@ -380,7 +380,7 @@ function IncidentsPage({ incidents, onSelect }: { incidents: Incident[]; onSelec
   )
 }
 
-function SurfacesPage({ domains, sensors, onDeploy }: { domains: Domain[]; sensors: Sensor[]; onDeploy: (id?: BlueprintId) => void }) {
+function SurfacesPage({ domains, sensors, onDeploy, onAddSensor }: { domains: Domain[]; sensors: Sensor[]; onDeploy: (id?: BlueprintId) => void; onAddSensor: () => void }) {
   return (
     <div className="surfaces-grid">
       <section className="panel identity-panel">
@@ -409,7 +409,7 @@ function SurfacesPage({ domains, sensors, onDeploy }: { domains: Domain[]; senso
       </section>
 
       <section className="panel sensor-panel-wide">
-        <header className="panel__header"><div><span className="eyebrow">Agentless projection fabric</span><h3>Deployment sensors</h3></div><button className="button button--small"><Plus size={15} /> Add sensor</button></header>
+        <header className="panel__header"><div><span className="eyebrow">Agentless projection fabric</span><h3>Deployment sensors</h3></div><button className="button button--small" onClick={onAddSensor}><Plus size={15} /> Add sensor</button></header>
         <div className="sensor-cards">{sensors.map((sensor) => <article key={sensor.id}><div className="sensor-card__top"><span><Radio size={17} /></span><StatusDot tone={sensor.health > 90 ? 'healthy' : 'attention'} /></div><strong>{sensor.name}</strong><small>{sensor.type} · v{sensor.version}</small><div className="sensor-stats"><span><strong>{sensor.health}%</strong> health</span><span><strong>{sensor.latency}ms</strong> latency</span></div><footer><span>{sensor.address}</span><span>{sensor.lastSeen}</span></footer></article>)}</div>
       </section>
     </div>
@@ -555,6 +555,29 @@ function DeployWizard({ initialBlueprint, onClose, onComplete }: { initialBluepr
   )
 }
 
+function SensorEnrollmentModal({ onClose, onToast }: { onClose: () => void; onToast: (message: string) => void }) {
+  const [name, setName] = useState('Edge projection sensor')
+  const [enrollment, setEnrollment] = useState<{ token: string; expiresAt: string } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const controllerUrl = window.location.port === '4173' ? `${window.location.protocol}//${window.location.hostname}:8787` : window.location.origin
+  const runCommand = enrollment ? `docker run --rm --network host -e AID_CONTROLLER_URL=${controllerUrl} -e AID_ENROLLMENT_TOKEN=${enrollment.token} -e "AID_SENSOR_NAME=${name}" -v aidecepticon-sensor-state:/var/lib/aidecepticon aidecepticon-sensor` : ''
+
+  async function generateEnrollment() {
+    setLoading(true)
+    setError('')
+    try {
+      setEnrollment(await apiPost<{ token: string; expiresAt: string }>('sensor-enrollment-tokens', { label: name, ttlMinutes: 15 }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to create enrollment token')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <div className="modal-backdrop"><section className="simple-modal sensor-enrollment-modal" role="dialog" aria-modal="true" aria-label="Enroll projection sensor"><header><div className="modal-title-icon"><Radio size={20} /></div><div><span className="eyebrow">Projection fabric</span><h2>{enrollment ? 'Enroll your sensor' : 'Add a projection sensor'}</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{!enrollment ? <div className="token-form"><p>Create a single-use enrollment token for a sensor in an on-premises, cloud, edge, or isolated network segment.</p><label><span>Sensor name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. East datacenter" /></label><div className="sensor-security-list"><span><ShieldCheck size={16} /><b>One-time token</b> Expires after 15 minutes</span><span><KeyRound size={16} /><b>Unique identity</b> Per-sensor access and signing keys</span><span><LockKeyhole size={16} /><b>Secure transport</b> HTTPS and optional mTLS</span></div>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary full" disabled={!name.trim() || loading} onClick={generateEnrollment}>{loading ? <RefreshCw className="spin" size={16} /> : <Plus size={16} />} Create enrollment</button></div> : <div className="sensor-enrollment"><div className="enrollment-expiry"><StatusDot tone="healthy" /><span><strong>Enrollment ready</strong>Token expires {new Date(enrollment.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div><div className="enrollment-step"><b>1</b><span><strong>Build the sensor image</strong><code>docker build -t aidecepticon-sensor ./sensor</code></span><button onClick={() => { navigator.clipboard?.writeText('docker build -t aidecepticon-sensor ./sensor'); onToast('Build command copied') }}><Clipboard size={14} /></button></div><div className="enrollment-step"><b>2</b><span><strong>Run in the target segment</strong><code>{runCommand}</code></span><button onClick={() => { navigator.clipboard?.writeText(runCommand); onToast('Enrollment command copied') }}><Clipboard size={14} /></button></div><div className="enrollment-step"><b>3</b><span><strong>Return here</strong><small>The sensor appears automatically after its first authenticated heartbeat.</small></span></div><div className="guardrail-note"><Shield size={17} /><span>The token is shown once. The sensor stores its unique credentials with owner-only permissions and verifies every command signature before execution.</span></div><button className="button button--primary full" onClick={onClose}>Done</button></div>}</section></div>
+}
+
 function TokenModal({ onClose, onComplete }: { onClose: () => void; onComplete: (message: string) => void }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('document')
@@ -589,6 +612,7 @@ function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [wizard, setWizard] = useState<{ open: boolean; blueprint?: BlueprintId }>({ open: false })
   const [tokenModal, setTokenModal] = useState(false)
+  const [sensorModal, setSensorModal] = useState(false)
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null)
   const [toast, setToast] = useState('')
   const [summary, setSummary] = useState(fallbackSummary)
@@ -654,7 +678,7 @@ function App() {
           {page === 'overview' && <OverviewPage summary={summary} incidents={incidents} sensors={sensors} onDeploy={() => setWizard({ open: true })} onIncident={setSelectedIncident} onNavigate={navigate} />}
           {page === 'mesh' && <MeshPage deployments={deployments} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onToken={() => setTokenModal(true)} />}
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
-          {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} />}
+          {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
           {page === 'system' && <SystemPage sensors={sensors} onToast={setToast} />}
         </main>
@@ -662,6 +686,7 @@ function App() {
 
       {wizard.open && <DeployWizard initialBlueprint={wizard.blueprint} onClose={() => setWizard({ open: false })} onComplete={(deployment) => { setDeployments((current) => [deployment, ...current]); setWizard({ open: false }); setToast(`${deployment.name} is provisioning`) }} />}
       {tokenModal && <TokenModal onClose={() => setTokenModal(false)} onComplete={setToast} />}
+      {sensorModal && <SensorEnrollmentModal onClose={() => setSensorModal(false)} onToast={setToast} />}
       {selectedIncident && <IncidentDrawer incident={selectedIncident} onClose={() => setSelectedIncident(null)} onUpdate={(updated) => { setIncidents((current) => current.map((item) => item.id === updated.id ? updated : item)); setSelectedIncident(updated); setToast(`Incident ${updated.id} updated`) }} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>

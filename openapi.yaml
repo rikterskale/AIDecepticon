@@ -100,6 +100,155 @@ paths:
       summary: List projection sensors
       responses:
         '200': { description: Sensor collection }
+  /sensor-enrollment-tokens:
+    post:
+      operationId: createSensorEnrollmentToken
+      summary: Create a single-use projection-sensor enrollment token
+      security:
+        - controlPlaneBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 100 }
+                ttlMinutes: { type: integer, minimum: 5, maximum: 60, default: 15 }
+      responses:
+        '201': { description: Single-use token created }
+        '401': { description: Control-plane authentication required }
+  /sensors/enroll:
+    post:
+      operationId: enrollSensor
+      summary: Exchange a single-use token for a projection-sensor identity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollmentToken, name]
+              properties:
+                enrollmentToken: { type: string }
+                sensorId: { type: string, minLength: 3, maxLength: 64 }
+                name: { type: string, maxLength: 100 }
+                version: { type: string }
+                platform: { type: string }
+                capabilities:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201': { description: Sensor enrolled; credentials are returned once }
+        '401': { description: Token invalid, expired, or used }
+        '409': { description: Sensor ID already exists }
+  /sensors/{sensorId}/heartbeat:
+    post:
+      operationId: reportSensorHeartbeat
+      summary: Report sensor health and active decoy inventory
+      security:
+        - sensorBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SensorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                health: { type: number, minimum: 0, maximum: 100 }
+                latency: { type: number, minimum: 0 }
+                version: { type: string }
+                address: { type: string }
+                decoys:
+                  type: array
+                  items: { type: object }
+      responses:
+        '200': { description: Heartbeat accepted }
+        '401': { description: Sensor authentication required }
+  /sensors/{sensorId}/commands:
+    get:
+      operationId: pollSensorCommands
+      summary: Poll queued, signed, unexpired commands
+      security:
+        - sensorBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SensorId'
+      responses:
+        '200': { description: Signed command collection }
+        '401': { description: Sensor authentication required }
+    post:
+      operationId: createSensorCommand
+      summary: Queue a signed command for a projection sensor
+      security:
+        - controlPlaneBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SensorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [deploy_decoy, stop_decoy, snapshot] }
+                payload: { type: object }
+      responses:
+        '201': { description: Signed command queued }
+        '404': { description: Sensor not found }
+  /sensors/{sensorId}/commands/{commandId}/ack:
+    post:
+      operationId: acknowledgeSensorCommand
+      summary: Acknowledge successful or failed sensor command execution
+      security:
+        - sensorBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SensorId'
+        - name: commandId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [acknowledged, failed] }
+                output: {}
+                error: { type: string }
+      responses:
+        '200': { description: Command state updated }
+        '404': { description: Command not found }
+  /sensors/{sensorId}/events:
+    post:
+      operationId: ingestSensorEvent
+      summary: Convert a projected-decoy interaction into an incident
+      security:
+        - sensorBearer: []
+      parameters:
+        - $ref: '#/components/parameters/SensorId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decoyId, source, protocol]
+              properties:
+                decoyId: { type: string }
+                decoyName: { type: string }
+                protocol: { type: string, enum: [http, ssh, postgres, redis, smb, tcp] }
+                source: { type: string }
+                destination: { type: string }
+                metadata: { type: object }
+      responses:
+        '201': { description: Event and high-confidence incident created }
+        '401': { description: Sensor authentication required }
   /domains:
     get:
       operationId: listDomains
@@ -124,3 +273,19 @@ paths:
       responses:
         '204': { description: Interaction recorded }
         '404': { description: Token not found }
+components:
+  securitySchemes:
+    controlPlaneBearer:
+      type: http
+      scheme: bearer
+      description: Optional control-plane API key configured by the administrator.
+    sensorBearer:
+      type: http
+      scheme: bearer
+      description: Unique sensor access token returned once during enrollment.
+  parameters:
+    SensorId:
+      name: sensorId
+      in: path
+      required: true
+      schema: { type: string }

@@ -7,6 +7,7 @@ Please do not disclose security issues through a public issue. Use GitHub's priv
 ## Secure deployment baseline
 
 - Set a strong `CONTROL_PLANE_API_KEY` before exposing the API beyond a single-user local environment.
+- Set `SENSOR_COMMAND_SIGNING_KEY` to at least 32 random bytes. Production startup fails when it is absent or undersized so projected sensors never inherit the public development key.
 - Terminate TLS at a trusted reverse proxy and restrict administrative access through an identity-aware gateway.
 - Set `CORS_ORIGIN` to the exact administrative console origin.
 - Keep the data directory on encrypted storage with access restricted to the service identity.

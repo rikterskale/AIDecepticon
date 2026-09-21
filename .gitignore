@@ -4,6 +4,9 @@ dist/
 .DS_Store
 coverage/
 runtime-data/
+sensor/bin/
+sensor/coverage.out
+sensor/sensor-state.json
 *.log
 *.tsbuildinfo
 vite.config.js

@@ -58,6 +58,12 @@ export interface Sensor {
   latency: number
   address: string
   lastSeen: string
+  status?: string
+  platform?: string
+  capabilities?: string[]
+  decoyCount?: number
+  enrolledAt?: string
+  lastSeenAt?: string
 }
 
 export interface Domain {

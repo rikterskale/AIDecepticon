@@ -125,4 +125,7 @@ export const seedState = {
     { id: 'int-defender', name: 'Microsoft Defender XDR', category: 'XDR', status: 'available', lastSync: '—' },
   ],
   tokens: [],
+  sensorEnrollmentTokens: [],
+  sensorCommands: [],
+  sensorEvents: [],
 };

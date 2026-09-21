@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { store } from './store.js';
+import { installSensorRoutes, publicSensor } from './sensor-api.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -32,6 +33,8 @@ function requireControlPlaneKey(request, response, next) {
   response.status(401).json({ error: 'A valid control-plane bearer token is required' });
 }
 
+installSensorRoutes(app, { store, requireControlPlaneKey });
+
 app.get('/api/v1/health', (_request, response) => {
   response.json({ status: 'ok', version: '0.1.0', time: new Date().toISOString() });
 });
@@ -50,9 +53,11 @@ app.get('/api/v1/summary', (_request, response) => {
   });
 });
 
-for (const resource of ['deployments', 'incidents', 'sensors', 'domains', 'integrations', 'tokens']) {
+for (const resource of ['deployments', 'incidents', 'domains', 'integrations', 'tokens']) {
   app.get(`/api/v1/${resource}`, (_request, response) => response.json({ items: store.read(resource) }));
 }
+
+app.get('/api/v1/sensors', (_request, response) => response.json({ items: store.read('sensors').map(publicSensor) }));
 
 app.post('/api/v1/deployments', requireControlPlaneKey, (request, response) => {
   const { name, blueprintId, environment, location, mode = 'agentless', customizations = {} } = request.body || {};
@@ -134,6 +139,10 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ error: 'Unexpected server error' });
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`AIDecepticon listening on http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`AIDecepticon listening on http://localhost:${port}`);
+  });
+}
+
+export { app };
