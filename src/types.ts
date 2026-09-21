@@ -173,3 +173,40 @@ export interface AuditResponse {
   items: AuditEvent[]
   verification: { valid: boolean; checked: number; headHash?: string; failedEventId?: string }
 }
+
+export interface BackupRecord {
+  id: string
+  createdAt: string
+  reason: 'manual' | 'scheduled' | 'pre-restore' | string
+  createdBy: string
+  keyId: string
+  sourceMode: 'json' | 'postgresql'
+  resourceCounts: Record<string, number>
+  auditEventCount: number
+  sizeBytes: number
+}
+
+export interface BackupHealth {
+  healthy: boolean
+  mode: string
+  enabled: boolean
+  scheduled: boolean
+  intervalHours: number
+  retentionCount: number
+  restoring?: boolean
+  lastBackupAt: string | null
+  nextRunAt: string | null
+  error?: string | null
+}
+
+export interface BackupResponse {
+  items: BackupRecord[]
+  health: BackupHealth
+}
+
+export interface BackupValidation extends BackupRecord {
+  valid: boolean
+  verification: { valid: boolean; checked: number; headHash?: string }
+  secretKeyIds: string[]
+  auditSigningKeyIds: string[]
+}

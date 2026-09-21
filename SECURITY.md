@@ -14,12 +14,12 @@ Please do not disclose security issues through a public issue. Use GitHub's priv
 - Require TLS and scoped service credentials for remote PostgreSQL and Redis instances; keep both services on private networks and never publish their ports directly.
 - Enable OIDC or SAML for shared deployments, require MFA evidence, and map only trusted identity-provider groups to AIDecepticon roles.
 - Map only trusted identity-provider claims to organization IDs, scope API credentials with `CONTROL_PLANE_API_ORGANIZATIONS`, and test cross-organization denial before onboarding managed customers.
-- Store `SESSION_SECRET`, OIDC client secrets, SAML certificates, encryption keyrings, audit signing keys, and scoped API credentials in the deployment secret manager rather than source control or container images.
+- Store `SESSION_SECRET`, OIDC client secrets, SAML certificates, secret and backup encryption keyrings, audit signing keys, and scoped API credentials in the deployment secret manager rather than source control or container images.
 - Prefer Vault Transit or AWS KMS for provider credentials. Local AES-256-GCM mode requires an externally managed `SECRET_LOCAL_KEYS` keyring; never store that keyring beside the encrypted data or in a container image.
-- Retain retired local and audit key IDs until every dependent secret or audit event has aged out. Removing a historical key prevents decryption or integrity verification.
+- Retain retired secret, backup, and audit key IDs until every dependent secret, archive, or audit event has aged out. Removing a historical key prevents decryption or integrity verification.
 - Ship `administrative_audit_events` to immutable external retention. PostgreSQL triggers block application-level updates, deletes, and truncation, while the HMAC chain exposes offline tampering.
 - Use HTTPS for authenticated deployments. SAML POST binding always requires HTTPS and OIDC production startup rejects an HTTP public URL.
-- Back up PostgreSQL and Redis append-only data, encrypt the backups, and test restoration before expanding the sensor fleet.
+- Store encrypted archives off-host and separately from `BACKUP_ENCRYPTION_KEYS`. Validate them regularly, preserve every referenced secret-provider and audit-signing key, and test full restoration in an isolated environment before expanding the sensor fleet. Redis is delivery acceleration and session state; PostgreSQL or JSON remains the durable control-plane source of truth.
 - Never embed live production credentials in a deception asset.
 - Deny decoys outbound access except for the explicit telemetry channel to the control plane.
 - Run projected workloads in isolated networks, namespaces, accounts, or subscriptions with no route back into production.

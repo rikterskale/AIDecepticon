@@ -28,6 +28,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - GUI-managed encrypted provider credentials using local AES-256-GCM, HashiCorp Vault Transit, or AWS KMS without plaintext list/read endpoints.
 - Append-only HMAC-chained administrative audit events with sensitive-field redaction, PostgreSQL mutation guards, and continuous integrity verification.
 - MSSP-ready organization isolation across control-plane data, sensors, encrypted secrets, commands, and tenant-filtered audit views, with a guided organization switcher.
+- AES-256-GCM encrypted portable full-state backups with retention scheduling, authenticated integrity checks, automatic pre-restore checkpoints, JSON/PostgreSQL restore parity, and a guarded GUI workflow.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -72,6 +73,7 @@ $env:NODE_ENV='production'
 $env:SENSOR_COMMAND_SIGNING_KEY='<at-least-32-random-bytes>'
 $env:SECRET_LOCAL_KEYS='{"primary":"<base64-encoded-32-byte-key>"}'
 $env:AUDIT_SIGNING_KEYS='{"primary":"<at-least-32-random-bytes>"}'
+$env:BACKUP_ENCRYPTION_KEYS='{"primary":"<base64-encoded-32-byte-key>"}'
 npm start
 ```
 
@@ -83,6 +85,7 @@ Then open `http://localhost:8787`.
 export SENSOR_COMMAND_SIGNING_KEY="$(openssl rand -hex 32)"
 export SECRET_LOCAL_KEYS="{\"primary\":\"$(openssl rand -base64 32)\"}"
 export AUDIT_SIGNING_KEYS="{\"primary\":\"$(openssl rand -base64 32)\"}"
+export BACKUP_ENCRYPTION_KEYS="{\"primary\":\"$(openssl rand -base64 32)\"}"
 docker compose up --build
 ```
 
@@ -118,6 +121,12 @@ Set `AUTH_ORGANIZATIONS_CLAIM` to the trusted OIDC/SAML claim containing organiz
 
 Every administrative or response mutation is automatically redacted and appended to an HMAC-SHA256 hash chain. PostgreSQL deployments store these records in a dedicated table whose triggers reject update, delete, and truncate operations. `AUDIT_SIGNING_KEYS` supports verification across key rotation; keep historical key IDs available until their retention window ends.
 
+### Backups and disaster recovery
+
+**Platform & API → Backups & recovery** lets a platform-scoped operator create, validate, download, and restore encrypted recovery points without a CLI. Each archive contains a portable snapshot of every organization and the chronological administrative audit chain, compressed and authenticated with AES-256-GCM. Restore verifies the archive and audit chain first, pauses command delivery, creates an encrypted pre-restore checkpoint, applies the snapshot transactionally, and resumes delivery.
+
+Set `BACKUP_ENCRYPTION_KEYS` to a JSON keyring of exactly 32-byte base64 or hex keys and select the writer with `BACKUP_ENCRYPTION_KEY_ID`. Keep retired keys available while their archives remain. `BACKUP_RETENTION_COUNT` defaults to 14; set `BACKUP_SCHEDULE_INTERVAL_HOURS` above zero for in-process scheduling. Store `BACKUP_DIR` on durable storage separate from the encryption keyring, copy archives off-host, and regularly use **Validate** plus a non-production restore drill. Backups preserve encrypted secret envelopes, so the corresponding secret-provider keys and historical audit signing keys are also required after recovery.
+
 ## Operator journey
 
 1. Open **Command center** to review coverage, live signals, incident confidence, and sensor health.
@@ -125,7 +134,7 @@ Every administrative or response mutation is automatically redacted and appended
 3. Use **Deception mesh → Canary tokens** to generate an instrumented file, credential, connection, cloud key, or API secret.
 4. Review touches in **Detections**, including the reconstructed sequence, confidence, MITRE ATT&CK mapping, and agentic-behavior assessment.
 5. Connect the response path in **Integrations**, then manage identity domains, endpoint policies, and sensors under **Protected surfaces**.
-6. Use **Platform & API** to protect provider credentials and verify the immutable administrative audit chain entirely through the GUI.
+6. Use **Platform & API** to protect provider credentials, verify the immutable administrative audit chain, and create or restore encrypted recovery points entirely through the GUI.
 
 ## API
 
@@ -152,6 +161,10 @@ Implemented resources include:
 - `POST /api/v1/secrets/{secretId}/rotate`
 - `POST /api/v1/secrets/{secretId}/verify`
 - `GET /api/v1/audit-events`
+- `GET|POST /api/v1/backups`
+- `GET /api/v1/backups/{backupId}/download`
+- `POST /api/v1/backups/{backupId}/validate`
+- `POST /api/v1/backups/{backupId}/restore`
 - `POST /api/v1/sensor-enrollment-tokens`
 - `POST /api/v1/sensors/enroll`
 - `POST /api/v1/sensors/{sensorId}/heartbeat`
@@ -175,7 +188,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment, organization switching, tenant isolation, secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment, organization switching, tenant isolation, secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, encrypted backup tamper detection and JSON/PostgreSQL restoration, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 
@@ -185,7 +198,7 @@ AIDecepticon is for authorized defensive security operations. Deception artifact
 
 The complete milestone plan—including projection sensors, production control-plane work, endpoint delivery, SOC integrations, multi-domain AD, cloud controllers, decoy runtime breadth, AI/GenAI deception, and enterprise operations—is maintained in [ROADMAP.md](ROADMAP.md).
 
-The active milestone is production control-plane hardening: backup/restore automation, observability, and high-availability operations.
+The active milestone is production control-plane hardening: observability, high-availability topology, and zero-downtime upgrades.
 
 ## License
 

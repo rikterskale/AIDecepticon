@@ -10,7 +10,7 @@ export const rolePermissions = Object.freeze({
   platform_admin: ['*'],
   deception_engineer: ['organization:read', 'platform:read', 'deception:read', 'deception:write', 'sensor:read', 'sensor:write', 'token:write', 'incident:read'],
   analyst: ['organization:read', 'platform:read', 'deception:read', 'sensor:read', 'incident:read', 'incident:write'],
-  auditor: ['organization:read', 'platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read', 'secret:read'],
+  auditor: ['organization:read', 'platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read', 'secret:read', 'backup:read'],
   service: [],
 });
 

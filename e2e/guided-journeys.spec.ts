@@ -144,4 +144,21 @@ test.describe('guided operator journeys', () => {
     await page.getByLabel('Active organization').selectOption({ label: 'AIDecepticon Demo' })
     await expect(page.getByLabel('Active organization').locator('option:checked')).toHaveText('AIDecepticon Demo')
   })
+
+  test('creates and validates an encrypted recovery point through the GUI', async ({ page }) => {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Platform & API' }).click()
+    const recovery = page.locator('.backup-panel')
+    await recovery.getByRole('button', { name: 'Create backup' }).first().click()
+
+    const row = recovery.locator('article').filter({ hasText: /bkp-\d{8}T\d{6}Z-[a-f0-9]{8}/ }).first()
+    await expect(row).toBeVisible()
+    await row.getByRole('button', { name: 'Validate' }).click()
+    await expect(page.getByText(/verified: \d+ audit events/)).toBeVisible()
+
+    await row.getByRole('button', { name: 'Restore' }).click()
+    const restore = page.getByRole('dialog', { name: /Restore bkp-/ })
+    await expect(restore.getByText('This replaces all current control-plane state.')).toBeVisible()
+    await expect(restore.getByRole('button', { name: 'Validate, checkpoint & restore' })).toBeDisabled()
+  })
 })

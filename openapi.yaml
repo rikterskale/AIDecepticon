@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AIDecepticon Control Plane API
   version: 0.1.0
-  description: API for managing organization-isolated deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, identity domains, and integrations. Operator endpoints use X-AIDecepticon-Organization to select an authorized organization.
+  description: API for managing organization-isolated deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, encrypted full-state backups, identity domains, and integrations. Operator endpoints use X-AIDecepticon-Organization to select an authorized organization; backup operations additionally require platform-wide scope.
   license:
     name: MIT
     identifier: MIT
@@ -505,6 +505,83 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
       responses:
         '200': { description: Audit events and chain verification result }
+  /backups:
+    get:
+      operationId: listBackups
+      summary: List encrypted full-state recovery points
+      description: Requires backup:read and platform-wide organization scope.
+      responses:
+        '200':
+          description: Recovery points and backup scheduler health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, health]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Backup' }
+                  health: { $ref: '#/components/schemas/BackupHealth' }
+        '403': { description: Platform-wide scope is required }
+    post:
+      operationId: createBackup
+      summary: Create an encrypted portable full-state recovery point
+      description: Requires backup:write and platform-wide organization scope.
+      responses:
+        '201':
+          description: Encrypted recovery point created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Backup' }
+        '403': { description: Platform-wide scope is required }
+  /backups/{backupId}/validate:
+    post:
+      operationId: validateBackup
+      summary: Authenticate an archive and verify its audit chain
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+      responses:
+        '200': { description: Archive and audit chain are valid }
+        '403': { description: Platform-wide scope is required }
+        '404': { description: Backup not found }
+  /backups/{backupId}/download:
+    get:
+      operationId: downloadBackup
+      summary: Download an encrypted recovery-point archive
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+      responses:
+        '200':
+          description: AES-256-GCM encrypted archive
+          content:
+            application/json:
+              schema: { type: string, format: binary }
+        '403': { description: Platform-wide scope is required }
+        '404': { description: Backup not found }
+  /backups/{backupId}/restore:
+    post:
+      operationId: restoreBackup
+      summary: Validate and restore a full-state recovery point
+      description: Requires backup:write and platform-wide scope. The service creates an encrypted pre-restore checkpoint and pauses command delivery before applying the snapshot.
+      parameters:
+        - $ref: '#/components/parameters/BackupId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+                  description: Exact backup ID being restored.
+      responses:
+        '200': { description: Snapshot restored and pre-restore checkpoint created }
+        '400': { description: Exact backup-ID confirmation is missing }
+        '403': { description: Platform-wide scope is required }
+        '404': { description: Backup not found }
   /domains:
     parameters:
       - $ref: '#/components/parameters/OrganizationId'
@@ -553,6 +630,35 @@ components:
         healthy: { type: boolean }
         mode: { type: string }
         error: { type: string }
+    Backup:
+      type: object
+      required: [id, createdAt, reason, createdBy, keyId, sourceMode, resourceCounts, auditEventCount, sizeBytes]
+      properties:
+        id: { type: string, pattern: '^bkp-' }
+        createdAt: { type: string, format: date-time }
+        reason: { type: string, enum: [manual, scheduled, pre-restore] }
+        createdBy: { type: string }
+        keyId: { type: string }
+        sourceMode: { type: string, enum: [json, postgresql] }
+        resourceCounts:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        auditEventCount: { type: integer, minimum: 0 }
+        sizeBytes: { type: integer, minimum: 1 }
+    BackupHealth:
+      type: object
+      required: [healthy, mode, enabled, scheduled, intervalHours, retentionCount]
+      properties:
+        healthy: { type: boolean }
+        mode: { type: string, const: encrypted-full-state }
+        enabled: { type: boolean }
+        scheduled: { type: boolean }
+        intervalHours: { type: number, minimum: 0 }
+        retentionCount: { type: integer, minimum: 1 }
+        restoring: { type: boolean }
+        lastBackupAt: { type: [string, 'null'], format: date-time }
+        nextRunAt: { type: [string, 'null'], format: date-time }
+        error: { type: [string, 'null'] }
     Health:
       type: object
       required: [status, version, time, infrastructure]
@@ -562,7 +668,7 @@ components:
         time: { type: string, format: date-time }
         infrastructure:
           type: object
-          required: [storage, queue, scheduler, authentication, secrets, audit]
+          required: [storage, queue, scheduler, authentication, secrets, audit, backups]
           properties:
             storage: { $ref: '#/components/schemas/InfrastructureHealth' }
             queue: { $ref: '#/components/schemas/InfrastructureHealth' }
@@ -570,6 +676,7 @@ components:
             authentication: { $ref: '#/components/schemas/InfrastructureHealth' }
             secrets: { $ref: '#/components/schemas/InfrastructureHealth' }
             audit: { $ref: '#/components/schemas/InfrastructureHealth' }
+            backups: { $ref: '#/components/schemas/BackupHealth' }
   securitySchemes:
     controlPlaneSession:
       type: apiKey
@@ -606,3 +713,8 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: '^sec-' }
+    BackupId:
+      name: backupId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^bkp-\d{8}T\d{6}Z-[a-f0-9]{8}$' }

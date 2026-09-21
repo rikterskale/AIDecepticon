@@ -80,6 +80,9 @@ function actionFor(request) {
   if (path === '/api/v1/secrets') return 'secret.create';
   if (/\/secrets\/[^/]+\/rotate$/.test(path)) return 'secret.rotate';
   if (/\/secrets\/[^/]+\/verify$/.test(path)) return 'secret.verify';
+  if (path === '/api/v1/backups') return 'backup.create';
+  if (/\/backups\/[^/]+\/validate$/.test(path)) return 'backup.validate';
+  if (/\/backups\/[^/]+\/restore$/.test(path)) return 'backup.restore';
   return `http.${request.method.toLowerCase()}`;
 }
 
@@ -155,6 +158,10 @@ export class AuditTrail {
   async verify(limit = 10_000) {
     await this.flush();
     const events = [...await this.store.readAudit(limit)].reverse();
+    return this.verifyEvents(events);
+  }
+
+  verifyEvents(events) {
     let previousHash = events[0]?.previousHash || genesisHash;
     for (const event of events) {
       const expectedHash = this.sign(event);
@@ -184,7 +191,9 @@ export class AuditTrail {
         const segments = request.path.split('/').filter(Boolean);
         const targetId = response.locals.auditTargetId || segments.at(-1);
         void this.append({
-          organizationId: response.locals.auditOrganizationId || request.organization?.id || request.sensor?.organizationId || null,
+          organizationId: Object.hasOwn(response.locals, 'auditOrganizationId')
+            ? response.locals.auditOrganizationId
+            : request.organization?.id || request.sensor?.organizationId || null,
           actor: actorFor(request),
           action: response.locals.auditAction || actionFor(request),
           target: { type: response.locals.auditTargetType || segments.at(-2) || 'control-plane', id: String(targetId || '') },

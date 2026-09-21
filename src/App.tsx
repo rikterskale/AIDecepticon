@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   AppWindow,
+  ArchiveRestore,
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
@@ -18,6 +19,7 @@ import {
   Cloud,
   Code2,
   Database,
+  Download,
   ExternalLink,
   Eye,
   FileKey,
@@ -53,7 +55,7 @@ import {
   Zap,
   type LucideProps,
 } from 'lucide-react'
-import { apiGet, apiPatch, apiPost, setApiOrganization } from './api'
+import { apiDownload, apiGet, apiPatch, apiPost, setApiOrganization } from './api'
 import {
   blueprints,
   fallbackDeployments,
@@ -63,7 +65,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { AuditResponse, AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, Organization, OrganizationResponse, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
+import type { AuditResponse, AuthSession, BackupHealth, BackupRecord, BackupResponse, BackupValidation, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, Organization, OrganizationResponse, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -454,7 +456,7 @@ function IntegrationsPage({ integrations, onToast }: { integrations: Integration
   )
 }
 
-function SystemPage({ sensors, auth, organizations, activeOrganizationId, secrets, audit, onAddOrganization, onAddSecret, onRotateSecret, onVerifySecret, onToast }: { sensors: Sensor[]; auth: AuthSession; organizations: Organization[]; activeOrganizationId: string; secrets: SecretRecord[]; audit: AuditResponse; onAddOrganization: () => void; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onToast: (message: string) => void }) {
+function SystemPage({ sensors, auth, organizations, activeOrganizationId, secrets, audit, backups, backupHealth, onAddOrganization, onAddSecret, onRotateSecret, onVerifySecret, onCreateBackup, onValidateBackup, onDownloadBackup, onRestoreBackup, onToast }: { sensors: Sensor[]; auth: AuthSession; organizations: Organization[]; activeOrganizationId: string; secrets: SecretRecord[]; audit: AuditResponse; backups: BackupRecord[]; backupHealth: BackupHealth; onAddOrganization: () => void; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onCreateBackup: () => void; onValidateBackup: (backup: BackupRecord) => void; onDownloadBackup: (backup: BackupRecord) => void; onRestoreBackup: (backup: BackupRecord) => void; onToast: (message: string) => void }) {
   const curl = [
     `curl -X POST http://localhost:8787/api/v1/tokens \\`,
     `  -H "Content-Type: application/json" \\`,
@@ -466,6 +468,9 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
   const canReadAudit = auth.permissions.includes('*') || auth.permissions.includes('audit:read')
   const canManageOrganizations = (auth.permissions.includes('*') || auth.permissions.includes('organization:write'))
     && (auth.user?.role === 'platform_admin' || auth.user?.organizationIds?.includes('*'))
+  const hasPlatformScope = auth.user?.role === 'platform_admin' || auth.user?.organizationIds?.includes('*')
+  const canReadBackups = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('backup:read')))
+  const canWriteBackups = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('backup:write')))
   return (
     <div className="system-layout">
       <section className="panel platform-health">
@@ -506,6 +511,16 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
           ? <div className="vault-empty"><LockKeyhole size={20} /><span><strong>No encrypted credentials yet</strong><small>Add the first provider credential through the guided vault workflow.</small></span>{canWriteSecrets && <button className="card-action" onClick={onAddSecret}>Add secret <ArrowRight size={13} /></button>}</div>
           : <div className="vault-list">{secrets.map((secret) => <article key={secret.id}><span><KeyRound size={16} /></span><div><strong>{secret.name}</strong><small>{secret.description || `${secret.type} credential`} · fp:{secret.fingerprint}</small></div><div className="vault-provider"><b>{secret.provider.replace('-', ' ')}</b><small>{secret.keyId}</small></div>{canWriteSecrets && <><button className="button button--small" onClick={() => onVerifySecret(secret)}><ShieldCheck size={13} /> Verify</button><button className="icon-button" aria-label={`Rotate ${secret.name}`} onClick={() => onRotateSecret(secret)}><RefreshCw size={14} /></button></>}</article>)}</div>}
       </section>
+      <section className="panel backup-panel">
+        <header className="panel__header"><div><span className="eyebrow">Encrypted disaster recovery</span><h3>Backups & recovery</h3></div>{canWriteBackups && <button className="button button--small" onClick={onCreateBackup}><Plus size={14} /> Create backup</button>}</header>
+        <p>Portable full-state archives protect every organization, encrypted secret envelope, deployment, sensor, command, and audit proof. Restore always creates a pre-restore checkpoint.</p>
+        {canReadBackups && <div className="backup-summary"><div><span>Protection</span><strong>AES-256-GCM</strong><small>Key {backups[0]?.keyId || 'configured externally'}</small></div><div><span>Retention</span><strong>{backupHealth.retentionCount} archives</strong><small>{backupHealth.scheduled ? `Every ${backupHealth.intervalHours}h` : 'Manual only'}</small></div><div><span>Next scheduled run</span><strong>{backupHealth.nextRunAt ? new Date(backupHealth.nextRunAt).toLocaleString() : 'Not scheduled'}</strong><small>{backupHealth.lastBackupAt ? `Last ${new Date(backupHealth.lastBackupAt).toLocaleString()}` : 'No backup completed yet'}</small></div></div>}
+        {!canReadBackups
+          ? <div className="access-restricted"><ArchiveRestore size={20} /><span><strong>Recovery controls require platform-wide scope</strong><small>Only platform administrators and globally scoped auditors can access full-system archives.</small></span></div>
+          : backups.length === 0
+          ? <div className="vault-empty"><ArchiveRestore size={20} /><span><strong>No recovery point yet</strong><small>Create the first encrypted full-state backup before making infrastructure changes.</small></span>{canWriteBackups && <button className="card-action" onClick={onCreateBackup}>Create backup <ArrowRight size={13} /></button>}</div>
+          : <div className="backup-list">{backups.map((backup) => <article key={backup.id}><span><ArchiveRestore size={16} /></span><div><strong>{backup.id}</strong><small>{new Date(backup.createdAt).toLocaleString()} · {backup.reason.replace('-', ' ')}</small></div><div className="backup-detail"><b>{backup.sourceMode}</b><small>{backup.auditEventCount} audit events · {(backup.sizeBytes / 1024).toFixed(1)} KB</small></div><button className="button button--small" onClick={() => onValidateBackup(backup)}><ShieldCheck size={13} /> Validate</button><button className="icon-button" aria-label={`Download ${backup.id}`} onClick={() => onDownloadBackup(backup)}><Download size={14} /></button>{canWriteBackups && <button className="button button--small backup-restore" onClick={() => onRestoreBackup(backup)}><RefreshCw size={13} /> Restore</button>}</article>)}</div>}
+      </section>
       <section className="panel audit-panel">
         <header className="panel__header"><div><span className="eyebrow">Tamper-evident governance</span><h3>Administrative audit chain</h3></div><span className={cx('chain-state', canReadAudit && audit.verification.valid && 'verified')}>{canReadAudit && audit.verification.valid ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{canReadAudit ? (audit.verification.valid ? 'Chain verified' : 'Verification failed') : 'Access restricted'}</span></header>
         {canReadAudit && <div className="audit-chain-summary"><div><span>Events checked</span><strong>{audit.verification.checked}</strong></div><div><span>Chain head</span><code>{audit.verification.headHash?.slice(0, 18) || 'No events yet'}</code></div><div><span>Protection</span><strong>HMAC-SHA256</strong></div></div>}
@@ -517,6 +532,23 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
       </section>
     </div>
   )
+}
+
+function RestoreBackupModal({ backup, onClose, onComplete }: { backup: BackupRecord; onClose: () => void; onComplete: () => void }) {
+  const [confirmation, setConfirmation] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const restore = async () => {
+    setLoading(true); setError('')
+    try {
+      await apiPost(`backups/${backup.id}/restore`, { confirmation })
+      onComplete()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Restore failed')
+      setLoading(false)
+    }
+  }
+  return <div className="modal-backdrop"><section className="simple-modal restore-modal" role="dialog" aria-modal="true" aria-label={`Restore ${backup.id}`}><header><div className="modal-title-icon"><ArchiveRestore size={20} /></div><div><span className="eyebrow">Guarded disaster recovery</span><h2>Restore the full platform</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header><div className="token-form"><div className="restore-warning"><AlertTriangle size={20} /><span><strong>This replaces all current control-plane state.</strong><small>A new encrypted checkpoint is created immediately before the restore. Sensor delivery pauses during the transaction and resumes afterward.</small></span></div><div className="backup-restore-target"><span>Recovery point</span><code>{backup.id}</code><small>{new Date(backup.createdAt).toLocaleString()} · {backup.sourceMode}</small></div><label><span>Type the exact backup ID to confirm</span><input autoFocus value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={backup.id} /></label>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary full" disabled={confirmation !== backup.id || loading} onClick={restore}>{loading ? <RefreshCw className="spin" size={16} /> : <ArchiveRestore size={16} />} Validate, checkpoint & restore</button></div></section></div>
 }
 
 function SecretModal({ existing, onClose, onComplete }: { existing?: SecretRecord; onClose: () => void; onComplete: (secret: SecretRecord) => void }) {
@@ -705,6 +737,9 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const [integrations, setIntegrations] = useState(fallbackIntegrations)
   const [secrets, setSecrets] = useState<SecretRecord[]>([])
   const [audit, setAudit] = useState<AuditResponse>({ items: [], verification: { valid: true, checked: 0 } })
+  const [backups, setBackups] = useState<BackupRecord[]>([])
+  const [backupHealth, setBackupHealth] = useState<BackupHealth>({ healthy: true, mode: 'encrypted-full-state', enabled: true, scheduled: false, intervalHours: 0, retentionCount: 14, lastBackupAt: null, nextRunAt: null })
+  const [restoreBackup, setRestoreBackup] = useState<BackupRecord | null>(null)
   const [secretModal, setSecretModal] = useState<{ open: boolean; existing?: SecretRecord }>({ open: false })
 
   useEffect(() => {
@@ -722,7 +757,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
     if (!activeOrganizationId) return
     setApiOrganization(activeOrganizationId)
     setSummary({ protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' })
-    setDeployments([]); setIncidents([]); setSensors([]); setDeadLetters([]); setDomains([]); setIntegrations([]); setSecrets([]); setAudit({ items: [], verification: { valid: true, checked: 0 } })
+    setDeployments([]); setIncidents([]); setSensors([]); setDeadLetters([]); setDomains([]); setIntegrations([]); setSecrets([]); setAudit({ items: [], verification: { valid: true, checked: 0 } }); setBackups([])
     Promise.all([
       apiGet<Summary>('summary', { protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' }),
       apiGet<{ items: Deployment[] }>('deployments', { items: [] }),
@@ -733,8 +768,10 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       apiGet<{ items: Integration[] }>('integrations', { items: [] }),
       apiGet<{ items: SecretRecord[] }>('secrets', { items: [] }),
       apiGet<AuditResponse>('audit-events?limit=50', { items: [], verification: { valid: true, checked: 0 } }),
-    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit]) => {
+      apiGet<BackupResponse>('backups', { items: [], health: { healthy: true, mode: 'encrypted-full-state', enabled: true, scheduled: false, intervalHours: 0, retentionCount: 14, lastBackupAt: null, nextRunAt: null } }),
+    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit, nextBackups]) => {
       setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items); setSecrets(nextSecrets.items); setAudit(nextAudit)
+      setBackups(nextBackups.items); setBackupHealth(nextBackups.health)
     })
   }, [activeOrganizationId])
 
@@ -785,6 +822,28 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
     setToast(`${secret.name} is protected by ${secret.provider.replace('-', ' ')}`)
     await refreshAudit()
   }
+  const createBackup = async () => {
+    try {
+      const backup = await apiPost<BackupRecord>('backups', {})
+      setBackups((current) => [backup, ...current.filter((item) => item.id !== backup.id)])
+      setBackupHealth((current) => ({ ...current, lastBackupAt: backup.createdAt }))
+      setToast(`Encrypted recovery point ${backup.id} created`)
+      await refreshAudit()
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Backup creation failed') }
+  }
+  const validateBackup = async (backup: BackupRecord) => {
+    try {
+      const validation = await apiPost<BackupValidation>(`backups/${backup.id}/validate`, {})
+      setToast(`${backup.id} verified: ${validation.verification.checked} audit events and ${validation.secretKeyIds.length} secret key reference${validation.secretKeyIds.length === 1 ? '' : 's'}`)
+      await refreshAudit()
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Backup validation failed') }
+  }
+  const downloadBackup = async (backup: BackupRecord) => {
+    try {
+      await apiDownload(`backups/${backup.id}/download`, `${backup.id}.json`)
+      setToast(`${backup.id} downloaded as an encrypted archive`)
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Backup download failed') }
+  }
 
   return (
     <div className="app-shell">
@@ -822,7 +881,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
           {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
-          {page === 'system' && <SystemPage sensors={sensors} auth={auth} organizations={organizations} activeOrganizationId={activeOrganizationId} secrets={secrets} audit={audit} onAddOrganization={() => setOrganizationModal(true)} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onToast={setToast} />}
+          {page === 'system' && <SystemPage sensors={sensors} auth={auth} organizations={organizations} activeOrganizationId={activeOrganizationId} secrets={secrets} audit={audit} backups={backups} backupHealth={backupHealth} onAddOrganization={() => setOrganizationModal(true)} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onCreateBackup={createBackup} onValidateBackup={validateBackup} onDownloadBackup={downloadBackup} onRestoreBackup={setRestoreBackup} onToast={setToast} />}
         </main>
       </div>
 
@@ -831,6 +890,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       {sensorModal && <SensorEnrollmentModal onClose={() => setSensorModal(false)} onToast={setToast} />}
       {secretModal.open && <SecretModal existing={secretModal.existing} onClose={() => setSecretModal({ open: false })} onComplete={completeSecret} />}
       {organizationModal && <OrganizationModal onClose={() => setOrganizationModal(false)} onComplete={(organization) => { setOrganizations((current) => [...current, organization]); setOrganizationModal(false); switchOrganization(organization.id); setToast(`${organization.name} is ready with an isolated workspace`) }} />}
+      {restoreBackup && <RestoreBackupModal backup={restoreBackup} onClose={() => setRestoreBackup(null)} onComplete={() => window.location.reload()} />}
       {selectedIncident && <IncidentDrawer incident={selectedIncident} onClose={() => setSelectedIncident(null)} onUpdate={(updated) => { setIncidents((current) => current.map((item) => item.id === updated.id ? updated : item)); setSelectedIncident(updated); setToast(`Incident ${updated.id} updated`) }} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>

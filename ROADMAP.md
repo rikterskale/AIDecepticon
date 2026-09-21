@@ -51,7 +51,7 @@ Status: **CI baseline implemented; release hardening in progress**
 
 ## Milestone 3 — Production control plane
 
-Status: **Persistence, resilient delivery, enterprise access control, tenancy, and governance implemented**
+Status: **Persistence, resilient delivery, enterprise access control, tenancy, governance, and disaster recovery implemented**
 
 - [x] PostgreSQL persistence with ordered, versioned schema migrations and safe single-runner migration locking.
 - [x] Redis-compatible sensor-command delivery queue with persistent source-of-truth recovery and local fallback.
@@ -61,7 +61,8 @@ Status: **Persistence, resilient delivery, enterprise access control, tenancy, a
 - [x] Encrypted secret storage with local AES-256-GCM, HashiCorp Vault Transit, and AWS KMS providers, key rotation, server-side verification, and a guided GUI.
 - [x] Append-only, HMAC-chained administrative and response audit trails with PostgreSQL mutation guards, automatic sensitive-field redaction, integrity verification, and a guided GUI.
 - [x] Multi-tenancy and MSSP organization boundaries with identity/API-key membership scope, storage-enforced tenant filtering, immutable PostgreSQL ownership, tenant-bound sensors and secrets, tenant-filtered audit views, and a guided GUI switcher.
-- [ ] High availability, backups, disaster recovery, and zero-downtime upgrades.
+- [x] AES-256-GCM encrypted portable full-state archives, scheduled retention, authenticated validation, automatic pre-restore checkpoints, and transactional JSON/PostgreSQL recovery through the GUI and API.
+- [ ] High-availability controller topology and zero-downtime upgrade/rollback tests.
 - [ ] Prometheus metrics, OpenTelemetry traces, structured logs, and service-level objectives.
 
 ## Milestone 4 — Token and endpoint delivery
@@ -152,7 +153,7 @@ Status: **Planned**
 ## Near-term delivery sequence
 
 1. Finish controller-driven sensor upgrades, hardware-backed credentials, and automatic mTLS rotation.
-2. Add backup/restore automation, high-availability topology, and zero-downtime upgrade tests.
+2. Add high-availability controller topology and zero-downtime upgrade/rollback tests on top of the completed backup/restore foundation.
 3. Add Prometheus metrics, OpenTelemetry traces, structured logs, and service-level objectives.
 4. Deliver real endpoint token builders and one SIEM, one SOAR, and one EDR adapter.
 5. Implement multi-domain AD and AWS as the first identity and cloud controllers.

@@ -24,6 +24,10 @@ export function canAccessOrganization(user, organizationId) {
   return ids.includes('*') || ids.includes(organizationId);
 }
 
+export function hasPlatformScope(user) {
+  return Boolean(user) && (user.role === 'platform_admin' || normalizeOrganizationIds(user.organizationIds || []).includes('*'));
+}
+
 export function organizationScope(request) {
   if (!request.organization?.id) throw new Error('An active organization is required');
   return { organizationId: request.organization.id };
@@ -79,7 +83,7 @@ export class TenancyController {
     });
 
     app.post('/api/v1/organizations', requirePermission('organization:write'), async (request, response) => {
-      if (request.user.role !== 'platform_admin' && !normalizeOrganizationIds(request.user.organizationIds).includes('*')) {
+      if (!hasPlatformScope(request.user)) {
         return response.status(403).json({ error: 'Organization creation requires platform-wide scope' });
       }
       const name = String(request.body?.name || '').trim();

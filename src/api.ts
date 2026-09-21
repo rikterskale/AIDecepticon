@@ -45,3 +45,17 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   if (!response.ok) throw new Error(`API returned ${response.status}`)
   return (await response.json()) as T
 }
+
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const response = await fetch(`/api/v1/${path}`, { headers: requestHeaders(), credentials: 'same-origin' })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(payload.error || `API returned ${response.status}`)
+  }
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}

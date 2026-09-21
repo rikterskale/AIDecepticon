@@ -9,7 +9,8 @@ import { createCommandQueue, createCommandScheduler } from './command-queue.js';
 import { createAuthController } from './auth.js';
 import { createSecretManager, publicSecret } from './secret-manager.js';
 import { createAuditTrail } from './audit.js';
-import { createTenancyController, organizationScope } from './tenancy.js';
+import { createTenancyController, hasPlatformScope, organizationScope } from './tenancy.js';
+import { createBackupService } from './backup.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -19,6 +20,7 @@ const commandScheduler = createCommandScheduler(store, commandQueue);
 const authController = createAuthController();
 const secretManager = createSecretManager();
 const auditTrail = createAuditTrail(store);
+const backupService = createBackupService(store, auditTrail);
 const tenancyController = createTenancyController(store);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
@@ -39,6 +41,12 @@ app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(auditTrail.middleware());
 authController.install(app);
+app.use((request, response, next) => {
+  if (backupService.restoring && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+    return response.status(503).set('Retry-After', '5').json({ error: 'A full-system restore is in progress; retry this mutation shortly' });
+  }
+  next();
+});
 tenancyController.install(app, authController.requirePermission.bind(authController));
 
 installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission: authController.requirePermission.bind(authController) });
@@ -48,13 +56,72 @@ app.get('/api/v1/health', async (_request, response) => {
   const scheduler = commandScheduler.health();
   const authentication = authController.health();
   const secrets = secretManager.health();
-  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy && secrets.healthy && audit.healthy;
+  const backups = backupService.health();
+  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy && secrets.healthy && audit.healthy && backups.healthy;
   response.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     version: '0.1.0',
     time: new Date().toISOString(),
-    infrastructure: { storage, queue, scheduler, authentication, secrets, audit },
+    infrastructure: { storage, queue, scheduler, authentication, secrets, audit, backups },
   });
+});
+
+function requirePlatformScope(request, response, next) {
+  if (!hasPlatformScope(request.user)) return response.status(403).json({ error: 'Backup operations require platform-wide scope' });
+  next();
+}
+
+app.get('/api/v1/backups', authController.requirePermission('backup:read'), requirePlatformScope, async (_request, response) => {
+  response.set('Cache-Control', 'no-store');
+  response.json({ items: await backupService.list(), health: backupService.health() });
+});
+
+app.post('/api/v1/backups', authController.requirePermission('backup:write'), requirePlatformScope, async (request, response) => {
+  const backup = await backupService.create({ reason: 'manual', createdBy: request.user.id });
+  response.locals.auditAction = 'backup.create';
+  response.locals.auditTargetId = backup.id;
+  response.locals.auditTargetType = 'backup';
+  response.locals.auditOrganizationId = null;
+  response.set('Cache-Control', 'no-store');
+  response.status(201).json(backup);
+});
+
+app.post('/api/v1/backups/:id/validate', authController.requirePermission('backup:read'), requirePlatformScope, async (request, response) => {
+  const validation = await backupService.validate(request.params.id);
+  response.locals.auditAction = 'backup.validate';
+  response.locals.auditTargetId = request.params.id;
+  response.locals.auditTargetType = 'backup';
+  response.locals.auditOrganizationId = null;
+  response.set('Cache-Control', 'no-store');
+  response.json(validation);
+});
+
+app.get('/api/v1/backups/:id/download', authController.requirePermission('backup:read'), requirePlatformScope, (request, response, next) => {
+  try {
+    response.set('Cache-Control', 'no-store');
+    response.download(backupService.downloadPath(request.params.id), `${request.params.id}.json`);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/v1/backups/:id/restore', authController.requirePermission('backup:write'), requirePlatformScope, async (request, response) => {
+  if (request.body?.confirmation !== request.params.id) {
+    return response.status(400).json({ error: 'Type the exact backup ID to confirm this full-system restore' });
+  }
+  commandScheduler.close();
+  try {
+    const result = await backupService.restore(request.params.id, { createdBy: request.user.id });
+    response.locals.auditAction = 'backup.restore';
+    response.locals.auditTargetId = request.params.id;
+    response.locals.auditTargetType = 'backup';
+    response.locals.auditOrganizationId = null;
+    response.set('Cache-Control', 'no-store');
+    response.json(result);
+  } finally {
+    await commandScheduler.runOnce().catch((error) => console.error(`Command recovery after restore failed: ${error.message}`));
+    commandScheduler.start();
+  }
 });
 
 app.get('/api/v1/summary', authController.requirePermission('platform:read'), async (request, response) => {
@@ -244,19 +311,22 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
-  response.status(500).json({ error: 'Unexpected server error' });
+  const status = Number(error.statusCode) || 500;
+  response.status(status).json({ error: status < 500 ? error.message : 'Unexpected server error' });
 });
 
 let server;
 
 export async function initializeInfrastructure() {
   await Promise.all([store.init(), commandQueue.init(), authController.init()]);
+  await backupService.init();
   await commandScheduler.runOnce();
   commandScheduler.start();
 }
 
 export async function closeInfrastructure() {
   commandScheduler.close();
+  await backupService.close();
   await auditTrail.flush();
   await Promise.allSettled([authController.close(), secretManager.close(), commandQueue.close(), store.close()]);
 }
@@ -283,4 +353,4 @@ if (process.env.NODE_ENV !== 'test') {
   process.once('SIGINT', shutdown);
 }
 
-export { app, authController, tenancyController, secretManager, auditTrail, commandQueue, commandScheduler };
+export { app, authController, tenancyController, secretManager, auditTrail, backupService, commandQueue, commandScheduler };

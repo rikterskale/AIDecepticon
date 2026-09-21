@@ -12,6 +12,17 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function atomicWrite(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, content, { mode: 0o600 });
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
 function assertResource(key) {
   if (!resourcePattern.test(key)) throw new Error(`Invalid store resource ${key}`);
 }
@@ -72,10 +83,7 @@ export class JsonStore {
   }
 
   persist() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
-    const temporaryPath = `${this.statePath}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-    fs.renameSync(temporaryPath, this.statePath);
+    atomicWrite(this.statePath, JSON.stringify(this.state, null, 2));
   }
 
   async init() {}
@@ -132,6 +140,30 @@ export class JsonStore {
     } catch (error) {
       if (error.code === 'ENOENT') return [];
       throw new Error(`Unable to load audit events from ${this.auditPath}: ${error.message}`);
+    }
+  }
+
+  async exportSnapshot() {
+    await this.auditAppendQueue;
+    const auditEvents = [...await this.readAudit(10_000_000)].reverse();
+    return { resources: clone(this.state), auditEvents };
+  }
+
+  async importSnapshot(snapshot) {
+    await this.auditAppendQueue;
+    const previousState = clone(this.state);
+    const previousAudit = fs.existsSync(this.auditPath) ? fs.readFileSync(this.auditPath, 'utf8') : '';
+    const nextState = clone(snapshot.resources);
+    const nextAudit = snapshot.auditEvents.length ? `${snapshot.auditEvents.map((event) => JSON.stringify(event)).join('\n')}\n` : '';
+    try {
+      atomicWrite(this.statePath, JSON.stringify(nextState, null, 2));
+      atomicWrite(this.auditPath, nextAudit);
+      this.state = nextState;
+    } catch (error) {
+      atomicWrite(this.statePath, JSON.stringify(previousState, null, 2));
+      atomicWrite(this.auditPath, previousAudit);
+      this.state = previousState;
+      throw error;
     }
   }
 
@@ -283,6 +315,64 @@ export class PostgresStore {
       [Math.min(Math.max(Number(limit) || 100, 1), 10_000), options.organizationId || null],
     );
     return result.rows.map((row) => row.payload);
+  }
+
+  async exportSnapshot() {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const [records, audit] = await Promise.all([
+        client.query('SELECT resource_type, payload FROM control_plane_records ORDER BY resource_type, ordinal DESC'),
+        client.query('SELECT payload FROM administrative_audit_events ORDER BY sequence ASC'),
+      ]);
+      const resources = {};
+      for (const row of records.rows) {
+        resources[row.resource_type] ||= [];
+        resources[row.resource_type].push(row.payload);
+      }
+      await client.query('COMMIT');
+      return { resources, auditEvents: audit.rows.map((row) => row.payload) };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async importSnapshot(snapshot) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(84632019)');
+      await client.query('LOCK TABLE control_plane_records IN ACCESS EXCLUSIVE MODE');
+      await client.query('LOCK TABLE administrative_audit_events IN ACCESS EXCLUSIVE MODE');
+      await client.query("SET LOCAL aidecepticon.restore_mode = 'on'");
+      await client.query('DELETE FROM administrative_audit_events');
+      await client.query('DELETE FROM control_plane_records');
+      for (const [resource, items] of Object.entries(snapshot.resources)) {
+        assertResource(resource);
+        for (const item of [...items].reverse()) {
+          await client.query(
+            'INSERT INTO control_plane_records (resource_type, record_id, payload) VALUES ($1, $2, $3::jsonb)',
+            [resource, item.id, JSON.stringify(item)],
+          );
+        }
+      }
+      for (const event of snapshot.auditEvents) {
+        await client.query(
+          `INSERT INTO administrative_audit_events (event_id, occurred_at, payload, previous_hash, event_hash)
+           VALUES ($1, $2, $3::jsonb, $4, $5)`,
+          [event.id.replace(/^aud-/, ''), event.occurredAt, JSON.stringify(event), event.previousHash, event.hash],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async health() {
