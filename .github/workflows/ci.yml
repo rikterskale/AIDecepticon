@@ -54,13 +54,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build control plane
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
           tags: aidecepticon-control-plane:ci
       - name: Build projection sensor
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: sensor
           file: sensor/Dockerfile
