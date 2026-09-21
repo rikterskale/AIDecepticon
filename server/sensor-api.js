@@ -115,12 +115,12 @@ function techniqueFor(protocol) {
   })[protocol] || 'T1046';
 }
 
-export function installSensorRoutes(app, { store, commandQueue, commandScheduler, requireControlPlaneKey }) {
+export function installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission }) {
   assertSensorSecurityConfiguration();
 
   const requireSensor = authorizeSensor(store);
 
-  app.get('/api/v1/sensor-commands', requireControlPlaneKey, async (request, response) => {
+  app.get('/api/v1/sensor-commands', requirePermission('sensor:read'), async (request, response) => {
     const requestedStatuses = String(request.query.status || '').split(',').map((status) => status.trim()).filter(Boolean);
     const commands = await store.read('sensorCommands');
     const items = requestedStatuses.length
@@ -129,7 +129,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     response.json({ items });
   });
 
-  app.post('/api/v1/sensor-commands/:commandId/retry', requireControlPlaneKey, async (request, response) => {
+  app.post('/api/v1/sensor-commands/:commandId/retry', requirePermission('sensor:write'), async (request, response) => {
     const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
     if (!original) return response.status(404).json({ error: 'Command not found' });
     if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be retried' });
@@ -148,7 +148,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     response.status(201).json(result.command);
   });
 
-  app.post('/api/v1/sensor-commands/:commandId/dismiss', requireControlPlaneKey, async (request, response) => {
+  app.post('/api/v1/sensor-commands/:commandId/dismiss', requirePermission('sensor:write'), async (request, response) => {
     const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
     if (!original) return response.status(404).json({ error: 'Command not found' });
     if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be dismissed' });
@@ -160,7 +160,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     response.json(dismissed);
   });
 
-  app.post('/api/v1/sensor-enrollment-tokens', requireControlPlaneKey, async (request, response) => {
+  app.post('/api/v1/sensor-enrollment-tokens', requirePermission('sensor:write'), async (request, response) => {
     const ttlMinutes = Math.min(Math.max(Number(request.body?.ttlMinutes || 15), 5), 60);
     const token = crypto.randomBytes(32).toString('base64url');
     const createdAt = new Date();
@@ -245,7 +245,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     response.json({ items: commands });
   });
 
-  app.post('/api/v1/sensors/:sensorId/commands', requireControlPlaneKey, async (request, response) => {
+  app.post('/api/v1/sensors/:sensorId/commands', requirePermission('sensor:write'), async (request, response) => {
     const result = await createSensorCommand(store, commandQueue, request.params.sensorId, request.body);
     if (result.error) return response.status(result.status).json({ error: result.error });
     response.status(201).json(result.command);

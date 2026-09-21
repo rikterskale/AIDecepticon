@@ -24,6 +24,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - A persistent REST control-plane API and downloadable OpenAPI 3.1 contract.
 - Optional PostgreSQL persistence with ordered schema migrations and a Redis-compatible durable sensor-command queue.
 - Bounded sensor-command retries with exponential backoff, scheduled acknowledgement recovery, and a GUI-operated dead-letter queue.
+- Guided OIDC, SAML, or scoped API-key sign-in with server-side sessions, MFA-aware policy checks, and five enforceable RBAC roles.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -78,7 +79,7 @@ export SENSOR_COMMAND_SIGNING_KEY="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-The console and API are served at `http://localhost:8787`. Compose starts PostgreSQL 17 and Redis 8 with private persistent volumes; only the control-plane port is published. Set `POSTGRES_PASSWORD` to override the local-only database default.
+The console and API are served at `http://localhost:8787`. Compose starts PostgreSQL 17 and Redis 8 with private persistent volumes; the control-plane port is bound to loopback only. Set `POSTGRES_PASSWORD` to override the local-only database default.
 
 ### Persistence and queue modes
 
@@ -87,6 +88,14 @@ With no infrastructure variables set, AIDecepticon uses its owner-readable JSON 
 For fleet deployments, set `DATABASE_URL` and `REDIS_URL`. PostgreSQL becomes the source of truth for all resources and automatically applies the ordered migrations in `server/migrations`. Redis provides low-latency command delivery; queued commands remain recoverable from PostgreSQL if Redis is restarted or temporarily unavailable. Use `DATABASE_SSL=require` for a remote database and a `rediss://` URL for Redis over TLS.
 
 Each sensor command is claimed for one delivery attempt. Failed or unacknowledged attempts are rescheduled with bounded exponential backoff; expired commands and commands that exhaust their attempt limit move to the dead-letter queue. Operators can review, retry as a new signed command, or dismiss those commands from **Protected surfaces → Command dead-letter queue**. `COMMAND_SCHEDULER_INTERVAL_MS` controls the recovery sweep interval and defaults to five seconds.
+
+### Enterprise authentication and RBAC
+
+Local development defaults to `AUTH_MODE=disabled` and uses a clearly identified local administrator. Production startup permits disabled authentication only for loopback URLs. Shared deployments must use OIDC, SAML, or a strong scoped API key, provide a random `SESSION_SECRET` of at least 32 bytes, configure HTTPS in `PUBLIC_BASE_URL`, and keep Redis enabled for revocable server-side sessions.
+
+OIDC uses Authorization Code with PKCE, state, and nonce validation. SAML requires signed responses and assertions, validates `InResponseTo`, bounds clock skew and request lifetime, and publishes service-provider metadata at `/api/v1/auth/saml/metadata`. Set `AUTH_REQUIRE_MFA=true` with either `OIDC_REQUIRED_ACR`/accepted `amr` values or a trusted `SAML_MFA_ATTRIBUTE`.
+
+`AUTH_ROLE_MAPPINGS` maps trusted IdP groups to `platform_admin`, `deception_engineer`, `analyst`, `auditor`, or `service`. Every management API route enforces its corresponding permission. A `CONTROL_PLANE_API_KEY` can also be limited with `CONTROL_PLANE_API_PERMISSIONS`; when external identity is disabled, operators can exchange that key for an HTTP-only GUI session on the guided sign-in screen.
 
 ## Operator journey
 

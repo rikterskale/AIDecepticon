@@ -1,6 +1,15 @@
 import { expect, test } from '@playwright/test'
 
+const controlPlaneApiKey = 'e2e-control-plane-key-with-at-least-32-bytes'
+
 test.describe('guided operator journeys', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+    await page.getByLabel('Control-plane API key').fill(controlPlaneApiKey)
+    await page.getByRole('button', { name: 'Sign in securely' }).click()
+    await expect(page.getByRole('heading', { name: 'Make every attack path untrustworthy.' })).toBeVisible()
+  })
+
   test('deploys an AI infrastructure deception through the four-step wizard', async ({ page }) => {
     const deploymentName = `AI projection ${Date.now()}`
     await page.goto('/')
@@ -58,6 +67,7 @@ test.describe('guided operator journeys', () => {
   test('recovers a dead-lettered sensor command through protected surfaces', async ({ page, request }) => {
     const sensorId = `sen-browser-recovery-${Date.now()}`
     const tokenResponse = await request.post('http://127.0.0.1:8787/api/v1/sensor-enrollment-tokens', {
+      headers: { Authorization: `Bearer ${controlPlaneApiKey}` },
       data: { label: 'Browser recovery sensor' },
     })
     const token = await tokenResponse.json()
@@ -66,6 +76,7 @@ test.describe('guided operator journeys', () => {
     })
     const enrollment = await enrollmentResponse.json()
     const commandResponse = await request.post(`http://127.0.0.1:8787/api/v1/sensors/${sensorId}/commands`, {
+      headers: { Authorization: `Bearer ${controlPlaneApiKey}` },
       data: { type: 'snapshot', maxAttempts: 1 },
     })
     const command = await commandResponse.json()

@@ -31,6 +31,7 @@ import {
   Link2,
   ListFilter,
   LockKeyhole,
+  LogOut,
   Menu,
   Network,
   Plus,
@@ -62,7 +63,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, Sensor, SensorCommand, Summary } from './types'
+import type { AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -453,7 +454,7 @@ function IntegrationsPage({ integrations, onToast }: { integrations: Integration
   )
 }
 
-function SystemPage({ sensors, onToast }: { sensors: Sensor[]; onToast: (message: string) => void }) {
+function SystemPage({ sensors, auth, onToast }: { sensors: Sensor[]; auth: AuthSession; onToast: (message: string) => void }) {
   const curl = `curl -X POST http://localhost:8787/api/v1/tokens \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"name":"Quarterly plan","type":"document"}'`
   return (
     <div className="system-layout">
@@ -475,8 +476,8 @@ function SystemPage({ sensors, onToast }: { sensors: Sensor[]; onToast: (message
       <section className="panel access-panel">
         <header className="panel__header"><div><span className="eyebrow">Secure by default</span><h3>Access & governance</h3></div><button className="icon-button"><Settings2 size={16} /></button></header>
         <div className="setting-rows">
-          <div><span><LockKeyhole size={17} /></span><div><strong>Single sign-on</strong><small>OIDC with enforced MFA</small></div><StatusPill status="healthy" /></div>
-          <div><span><UserRoundCog size={17} /></span><div><strong>Role-based access</strong><small>4 roles · 12 active users</small></div><ChevronRight size={16} /></div>
+          <div><span><LockKeyhole size={17} /></span><div><strong>Single sign-on</strong><small>{auth.enabled ? `${auth.user?.provider.toUpperCase()} session${auth.user?.mfa ? ' · MFA verified' : ''}` : 'Development mode · external identity disabled'}</small></div><StatusPill status={auth.enabled ? 'healthy' : 'learning'} /></div>
+          <div><span><UserRoundCog size={17} /></span><div><strong>Role-based access</strong><small>{auth.user?.role.replaceAll('_', ' ')} · {auth.permissions.includes('*') ? 'Full access' : `${auth.permissions.length} permissions`}</small></div><ChevronRight size={16} /></div>
           <div><span><Clipboard size={17} /></span><div><strong>Audit trail</strong><small>Immutable administration events</small></div><ChevronRight size={16} /></div>
           <div><span><KeyRound size={17} /></span><div><strong>API credentials</strong><small>3 service principals</small></div><ChevronRight size={16} /></div>
         </div>
@@ -612,7 +613,7 @@ function IncidentDrawer({ incident, onClose, onUpdate }: { incident: Incident; o
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="incident-drawer" onMouseDown={(event) => event.stopPropagation()}><header><div><span className={cx('severity-label', `severity-label--${incident.severity}`)}>{incident.severity}</span><span>{incident.id}</span></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header><div className="drawer-title"><span className={cx('severity-orb', `severity-orb--${incident.severity}`)}><ShieldAlert size={21} /></span><h2>{incident.title}</h2><p>{incident.summary}</p></div><div className="drawer-facts"><div><span>Source</span><strong>{incident.source}</strong></div><div><span>Target</span><strong>{incident.target}</strong></div><div><span>MITRE ATT&CK</span><strong>{incident.technique}</strong></div><div><span>Confidence</span><strong>{incident.confidence}%</strong></div></div><section><span className="eyebrow">Attack sequence</span><div className="timeline">{incident.steps.map((step, index) => <div key={step}><span>{index + 1}</span><div><strong>{step}</strong><small>{index === incident.steps.length - 1 ? 'Current state' : `${Math.max(1, 7 - index * 2)} minutes ago`}</small></div></div>)}</div></section><section><span className="eyebrow">Why this matters</span><div className="insight-card"><Bot size={18} /><span><strong>Agentic behavior confidence: 96%</strong><small>Parallel discovery, uniform dwell time, and rapid tool switching exceed human interaction baselines.</small></span></div></section><footer><button className="button button--ghost" onClick={() => updateStatus('closed')} disabled={busy}>Close as benign</button><button className="button button--danger" onClick={() => updateStatus('contained')} disabled={busy}><ShieldCheck size={16} /> Contain source</button></footer></aside></div>
 }
 
-function App() {
+function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () => void }) {
   const [page, setPage] = useState<PageId>('overview')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [guided, setGuided] = useState(true)
@@ -653,6 +654,7 @@ function App() {
   const pageMeta = titleMap[page]
   const activeDeployments = useMemo(() => deployments.filter((deployment) => deployment.status !== 'provisioning').length, [deployments])
   const navigate = (destination: PageId) => { setPage(destination); setSidebarOpen(false) }
+  const initials = (auth.user?.displayName || 'AID').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()
   const retryCommand = async (command: SensorCommand) => {
     try {
       await apiPost<SensorCommand>(`sensor-commands/${command.id}/retry`, {})
@@ -684,7 +686,7 @@ function App() {
           <button onClick={() => setTokenModal(true)}><FileKey size={18} /><span>Generate token</span></button>
         </nav>
         <div className="sidebar-posture"><div><span>Environment posture</span><strong>{summary.coverage}%</strong></div><div className="posture-bar"><span style={{ width: `${summary.coverage}%` }} /></div><small><StatusDot /> {activeDeployments} deployments healthy</small></div>
-        <div className="user-card"><div className="avatar">TS</div><div><strong>Tom Saxon</strong><small>Platform administrator</small></div><ChevronRight size={16} /></div>
+        <button className="user-card" onClick={onLogout} title={auth.enabled ? 'Sign out' : 'Development identity'}><div className="avatar">{initials}</div><div><strong>{auth.user?.displayName}</strong><small>{auth.user?.role.replaceAll('_', ' ')}</small></div>{auth.enabled ? <LogOut size={16} /> : <ChevronRight size={16} />}</button>
       </aside>
 
       <div className="workspace">
@@ -707,7 +709,7 @@ function App() {
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
           {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
-          {page === 'system' && <SystemPage sensors={sensors} onToast={setToast} />}
+          {page === 'system' && <SystemPage sensors={sensors} auth={auth} onToast={setToast} />}
         </main>
       </div>
 
@@ -718,6 +720,51 @@ function App() {
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
   )
+}
+
+function AuthLoading() {
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-mark"><Hexagon size={27} fill="currentColor" /></div><span className="eyebrow">Deception operations</span><h1>Securing the control plane</h1><p>Validating the active identity and session policy.</p><RefreshCw className="spin auth-spinner" size={22} /></section></main>
+}
+
+function SignIn({ session }: { session: AuthSession }) {
+  const [apiKey, setApiKey] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  async function signInWithApiKey() {
+    setLoading(true); setError('')
+    try {
+      const response = await fetch('/api/v1/auth/api-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ apiKey }) })
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `Authentication returned ${response.status}`)
+      window.location.reload()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Authentication failed'); setLoading(false)
+    }
+  }
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-mark"><Hexagon size={27} fill="currentColor" /></div><span className="eyebrow">AIDecepticon</span><h1>Sign in to the control plane</h1><p>Use your organization identity to manage deception infrastructure. Access is mapped to least-privilege operator roles.</p><div className="auth-assurances"><span><ShieldCheck size={17} /><b>Verified identity</b><small>OIDC or signed SAML assertions</small></span><span><KeyRound size={17} /><b>MFA-aware</b><small>Policy checked before session creation</small></span><span><LockKeyhole size={17} /><b>Scoped access</b><small>Five enforceable operator roles</small></span></div>{session.mode === 'api_key' ? <div className="api-key-signin"><label><span>Control-plane API key</span><input type="password" autoFocus autoComplete="current-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && apiKey) void signInWithApiKey() }} /></label>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary auth-signin" disabled={!apiKey || loading} onClick={signInWithApiKey}>{loading ? <RefreshCw className="spin" size={17} /> : <KeyRound size={17} />} Sign in securely</button></div> : <a className="button button--primary auth-signin" href="/api/v1/auth/login?returnTo=/"><UserRoundCog size={17} /> Continue with {session.providerLabel}</a>}<small className="auth-footnote">Authentication mode: {session.mode.replaceAll('_', ' ')}{session.requireMfa ? ' · MFA required' : ''}</small></section></main>
+}
+
+function App() {
+  const [auth, setAuth] = useState<AuthSession | null>(null)
+
+  useEffect(() => {
+    fetch('/api/v1/auth/session', { credentials: 'same-origin' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Authentication API returned ${response.status}`)
+        return response.json() as Promise<AuthSession>
+      })
+      .then(setAuth)
+      .catch(() => setAuth({ enabled: true, mode: 'oidc', providerLabel: 'Enterprise SSO', requireMfa: false, authenticated: false, user: null, permissions: [] }))
+  }, [])
+
+  async function logout() {
+    if (!auth?.enabled) return
+    await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    setAuth({ ...auth, authenticated: false, user: null, permissions: [] })
+  }
+
+  if (!auth) return <AuthLoading />
+  if (auth.enabled && !auth.authenticated) return <SignIn session={auth} />
+  return <ControlPlaneApp auth={auth} onLogout={logout} />
 }
 
 export default App

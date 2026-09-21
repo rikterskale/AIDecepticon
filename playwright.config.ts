@@ -32,7 +32,11 @@ export default defineConfig({
         DATA_DIR: e2eDataDirectory,
         NODE_ENV: 'development',
         PUBLIC_BASE_URL: 'http://127.0.0.1:8787',
+        CORS_ORIGIN: 'http://127.0.0.1:4173',
         SENSOR_COMMAND_SIGNING_KEY: 'e2e-signing-key-with-at-least-32-random-bytes',
+        CONTROL_PLANE_API_KEY: 'e2e-control-plane-key-with-at-least-32-bytes',
+        CONTROL_PLANE_API_PERMISSIONS: '*',
+        SESSION_SECRET: 'e2e-session-secret-with-at-least-32-random-bytes',
       },
     },
     {

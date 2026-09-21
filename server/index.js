@@ -6,19 +6,18 @@ import cors from 'cors';
 import { store } from './store.js';
 import { installSensorRoutes, publicSensor } from './sensor-api.js';
 import { createCommandQueue, createCommandScheduler } from './command-queue.js';
+import { createAuthController } from './auth.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
-const controlPlaneApiKey = process.env.CONTROL_PLANE_API_KEY;
 const commandQueue = createCommandQueue(store);
 const commandScheduler = createCommandScheduler(store, commandQueue);
+const authController = createAuthController();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
 
 app.disable('x-powered-by');
-app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) || false }));
-app.use(express.json({ limit: '1mb' }));
 app.use((_request, response, next) => {
   response.set({
     'X-Content-Type-Options': 'nosniff',
@@ -29,28 +28,27 @@ app.use((_request, response, next) => {
   });
   next();
 });
+app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) || false }));
+app.use(express.urlencoded({ extended: false, limit: '256kb' }));
+app.use(express.json({ limit: '1mb' }));
+authController.install(app);
 
-function requireControlPlaneKey(request, response, next) {
-  if (!controlPlaneApiKey) return next();
-  if (request.get('authorization') === `Bearer ${controlPlaneApiKey}`) return next();
-  response.status(401).json({ error: 'A valid control-plane bearer token is required' });
-}
-
-installSensorRoutes(app, { store, commandQueue, commandScheduler, requireControlPlaneKey });
+installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission: authController.requirePermission.bind(authController) });
 
 app.get('/api/v1/health', async (_request, response) => {
   const [storage, queue] = await Promise.all([store.health(), commandQueue.health()]);
   const scheduler = commandScheduler.health();
-  const healthy = storage.healthy && queue.healthy && scheduler.healthy;
+  const authentication = authController.health();
+  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy;
   response.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     version: '0.1.0',
     time: new Date().toISOString(),
-    infrastructure: { storage, queue, scheduler },
+    infrastructure: { storage, queue, scheduler, authentication },
   });
 });
 
-app.get('/api/v1/summary', async (_request, response) => {
+app.get('/api/v1/summary', authController.requirePermission('platform:read'), async (_request, response) => {
   const [deployments, incidents, sensors] = await Promise.all([
     store.read('deployments'),
     store.read('incidents'),
@@ -66,13 +64,19 @@ app.get('/api/v1/summary', async (_request, response) => {
   });
 });
 
-for (const resource of ['deployments', 'incidents', 'domains', 'integrations', 'tokens']) {
-  app.get(`/api/v1/${resource}`, async (_request, response) => response.json({ items: await store.read(resource) }));
+for (const [resource, permission] of Object.entries({
+  deployments: 'deception:read',
+  incidents: 'incident:read',
+  domains: 'platform:read',
+  integrations: 'platform:read',
+  tokens: 'deception:read',
+})) {
+  app.get(`/api/v1/${resource}`, authController.requirePermission(permission), async (_request, response) => response.json({ items: await store.read(resource) }));
 }
 
-app.get('/api/v1/sensors', async (_request, response) => response.json({ items: (await store.read('sensors')).map(publicSensor) }));
+app.get('/api/v1/sensors', authController.requirePermission('sensor:read'), async (_request, response) => response.json({ items: (await store.read('sensors')).map(publicSensor) }));
 
-app.post('/api/v1/deployments', requireControlPlaneKey, async (request, response) => {
+app.post('/api/v1/deployments', authController.requirePermission('deception:write'), async (request, response) => {
   const { name, blueprintId, environment, location, mode = 'agentless', customizations = {} } = request.body || {};
   if (!name || !blueprintId || !environment || !location) {
     return response.status(400).json({ error: 'name, blueprintId, environment, and location are required' });
@@ -93,7 +97,7 @@ app.post('/api/v1/deployments', requireControlPlaneKey, async (request, response
   response.status(201).json(deployment);
 });
 
-app.patch('/api/v1/incidents/:id', requireControlPlaneKey, async (request, response) => {
+app.patch('/api/v1/incidents/:id', authController.requirePermission('incident:write'), async (request, response) => {
   const allowed = ['status', 'assignee'];
   const changes = Object.fromEntries(Object.entries(request.body || {}).filter(([key]) => allowed.includes(key)));
   const incident = await store.update('incidents', request.params.id, changes);
@@ -101,7 +105,7 @@ app.patch('/api/v1/incidents/:id', requireControlPlaneKey, async (request, respo
   response.json(incident);
 });
 
-app.post('/api/v1/tokens', requireControlPlaneKey, async (request, response) => {
+app.post('/api/v1/tokens', authController.requirePermission('token:write'), async (request, response) => {
   const { name, type = 'document', destination = 'default', metadata = {} } = request.body || {};
   if (!name) return response.status(400).json({ error: 'name is required' });
   const id = `tok-${crypto.randomUUID().slice(0, 12)}`;
@@ -155,15 +159,14 @@ app.use((error, _request, response, _next) => {
 let server;
 
 export async function initializeInfrastructure() {
-  await store.init();
-  await commandQueue.init();
+  await Promise.all([store.init(), commandQueue.init(), authController.init()]);
   await commandScheduler.runOnce();
   commandScheduler.start();
 }
 
 export async function closeInfrastructure() {
   commandScheduler.close();
-  await Promise.allSettled([commandQueue.close(), store.close()]);
+  await Promise.allSettled([authController.close(), commandQueue.close(), store.close()]);
 }
 
 export async function start() {
@@ -188,4 +191,4 @@ if (process.env.NODE_ENV !== 'test') {
   process.once('SIGINT', shutdown);
 }
 
-export { app, commandQueue, commandScheduler };
+export { app, authController, commandQueue, commandScheduler };

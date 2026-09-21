@@ -8,10 +8,13 @@ info:
     identifier: MIT
 servers:
   - url: http://localhost:8787/api/v1
-security: []
+security:
+  - controlPlaneSession: []
+  - controlPlaneBearer: []
 paths:
   /health:
     get:
+      security: []
       operationId: getHealth
       summary: Read service and infrastructure health
       responses:
@@ -25,6 +28,79 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
+  /auth/config:
+    get:
+      security: []
+      operationId: getAuthenticationConfig
+      summary: Read the configured sign-in mode and available roles
+      responses:
+        '200': { description: Authentication configuration }
+  /auth/session:
+    get:
+      security: []
+      operationId: getAuthenticationSession
+      summary: Read the current operator identity and permissions
+      responses:
+        '200': { description: Current authentication session }
+  /auth/login:
+    get:
+      security: []
+      operationId: beginEnterpriseLogin
+      summary: Begin OIDC or SAML authentication
+      parameters:
+        - name: returnTo
+          in: query
+          schema: { type: string, default: / }
+      responses:
+        '302': { description: Redirect to the configured identity provider }
+  /auth/api-key:
+    post:
+      security: []
+      operationId: createApiKeySession
+      summary: Exchange the configured control-plane API key for a GUI session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties:
+                apiKey: { type: string, format: password }
+      responses:
+        '200': { description: Server-side GUI session created }
+        '401': { description: API key invalid }
+        '404': { description: API-key sign-in is not configured }
+  /auth/logout:
+    post:
+      operationId: destroyAuthenticationSession
+      summary: Destroy the current operator session
+      responses:
+        '204': { description: Session destroyed }
+  /auth/oidc/callback:
+    get:
+      security: []
+      operationId: completeOidcLogin
+      summary: Validate an OIDC authorization response
+      responses:
+        '302': { description: Session created and operator returned to the GUI }
+        '400': { description: Authentication transaction invalid or expired }
+  /auth/saml/callback:
+    post:
+      security: []
+      operationId: completeSamlLogin
+      summary: Validate a signed SAML response
+      responses:
+        '302': { description: Session created and operator returned to the GUI }
+        '400': { description: Authentication transaction invalid or expired }
+  /auth/saml/metadata:
+    get:
+      security: []
+      operationId: getSamlMetadata
+      summary: Download service-provider metadata for identity-provider setup
+      responses:
+        '200': { description: SAML service-provider metadata }
+        '404': { description: SAML is not configured }
   /summary:
     get:
       operationId: getSummary
@@ -118,6 +194,7 @@ paths:
       operationId: listSensorCommands
       summary: List sensor commands, optionally filtered by lifecycle state
       security:
+        - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
         - name: status
@@ -130,6 +207,7 @@ paths:
       operationId: retrySensorCommand
       summary: Replace a dead-lettered command with a new signed delivery
       security:
+        - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
         - $ref: '#/components/parameters/CommandId'
@@ -142,6 +220,7 @@ paths:
       operationId: dismissSensorCommand
       summary: Dismiss a dead-lettered command after operator review
       security:
+        - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
         - $ref: '#/components/parameters/CommandId'
@@ -154,6 +233,7 @@ paths:
       operationId: createSensorEnrollmentToken
       summary: Create a single-use projection-sensor enrollment token
       security:
+        - controlPlaneSession: []
         - controlPlaneBearer: []
       requestBody:
         required: true
@@ -169,6 +249,7 @@ paths:
         '401': { description: Control-plane authentication required }
   /sensors/enroll:
     post:
+      security: []
       operationId: enrollSensor
       summary: Exchange a single-use token for a projection-sensor identity
       requestBody:
@@ -231,6 +312,7 @@ paths:
       operationId: createSensorCommand
       summary: Queue a signed command for a projection sensor
       security:
+        - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
         - $ref: '#/components/parameters/SensorId'
@@ -314,6 +396,7 @@ paths:
         '200': { description: Integration collection }
   /beacon/{tokenId}:
     get:
+      security: []
       operationId: triggerBeacon
       summary: Trigger a deception token interaction
       parameters:
@@ -342,12 +425,18 @@ components:
         time: { type: string, format: date-time }
         infrastructure:
           type: object
-          required: [storage, queue, scheduler]
+          required: [storage, queue, scheduler, authentication]
           properties:
             storage: { $ref: '#/components/schemas/InfrastructureHealth' }
             queue: { $ref: '#/components/schemas/InfrastructureHealth' }
             scheduler: { $ref: '#/components/schemas/InfrastructureHealth' }
+            authentication: { $ref: '#/components/schemas/InfrastructureHealth' }
   securitySchemes:
+    controlPlaneSession:
+      type: apiKey
+      in: cookie
+      name: __Host-aidecepticon.sid
+      description: HTTP-only server-side operator session established through OIDC, SAML, or API-key exchange.
     controlPlaneBearer:
       type: http
       scheme: bearer

@@ -12,6 +12,9 @@ Please do not disclose security issues through a public issue. Use GitHub's priv
 - Set `CORS_ORIGIN` to the exact administrative console origin.
 - Keep the data directory on encrypted storage with access restricted to the service identity.
 - Require TLS and scoped service credentials for remote PostgreSQL and Redis instances; keep both services on private networks and never publish their ports directly.
+- Enable OIDC or SAML for shared deployments, require MFA evidence, and map only trusted identity-provider groups to AIDecepticon roles.
+- Store `SESSION_SECRET`, OIDC client secrets, SAML certificates, and scoped API credentials in the deployment secret manager rather than source control or container images.
+- Use HTTPS for authenticated deployments. SAML POST binding always requires HTTPS and OIDC production startup rejects an HTTP public URL.
 - Back up PostgreSQL and Redis append-only data, encrypt the backups, and test restoration before expanding the sensor fleet.
 - Never embed live production credentials in a deception asset.
 - Deny decoys outbound access except for the explicit telemetry channel to the control plane.

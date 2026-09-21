@@ -103,3 +103,23 @@ export interface Summary {
   coverage: number
   meanTimeToDetect: string
 }
+
+export interface AuthUser {
+  id: string
+  email: string
+  displayName: string
+  role: 'platform_admin' | 'deception_engineer' | 'analyst' | 'auditor' | 'service'
+  groups: string[]
+  provider: string
+  mfa: boolean
+}
+
+export interface AuthSession {
+  enabled: boolean
+  mode: 'disabled' | 'api_key' | 'oidc' | 'saml'
+  providerLabel: string
+  requireMfa: boolean
+  authenticated: boolean
+  user: AuthUser | null
+  permissions: string[]
+}

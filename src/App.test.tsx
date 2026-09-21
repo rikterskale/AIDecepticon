@@ -4,19 +4,33 @@ import App from './App'
 
 describe('AIDecepticon control plane', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline test')))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).includes('/api/v1/auth/session')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          enabled: false,
+          mode: 'disabled',
+          providerLabel: 'Local development',
+          requireMfa: false,
+          authenticated: true,
+          user: { id: 'test-admin', email: 'admin@example.test', displayName: 'Test Admin', role: 'platform_admin', groups: [], provider: 'development', mfa: true },
+          permissions: ['*'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      }
+      return Promise.reject(new Error('offline test'))
+    }))
   })
 
   afterEach(() => cleanup())
 
-  it('renders the command center and primary guided action', () => {
+  it('renders the command center and primary guided action', async () => {
     render(<App />)
-    expect(screen.getByText('Make every attack path')).toBeInTheDocument()
+    expect(await screen.findByText('Make every attack path')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /deploy deception/i }).length).toBeGreaterThan(0)
   })
 
-  it('exposes every required decoy class in the blueprint library', () => {
+  it('exposes every required decoy class in the blueprint library', async () => {
     render(<App />)
+    await screen.findByText('Make every attack path')
     fireEvent.click(screen.getByRole('button', { name: /deception mesh/i }))
 
     for (const name of [
@@ -33,10 +47,26 @@ describe('AIDecepticon control plane', () => {
     }
   })
 
-  it('opens the GUI deployment workflow', () => {
+  it('opens the GUI deployment workflow', async () => {
     render(<App />)
+    await screen.findByText('Make every attack path')
     fireEvent.click(screen.getAllByRole('button', { name: /deploy deception/i })[0])
     expect(screen.getByRole('dialog', { name: /guided deception deployment/i })).toBeInTheDocument()
     expect(screen.getByText('Step 1 of 4')).toBeInTheDocument()
+  })
+
+  it('guides unauthenticated operators to enterprise sign-in', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      enabled: true,
+      mode: 'oidc',
+      providerLabel: 'Enterprise SSO',
+      requireMfa: true,
+      authenticated: false,
+      user: null,
+      permissions: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Sign in to the control plane' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Continue with enterprise SSO/i })).toHaveAttribute('href', '/api/v1/auth/login?returnTo=/')
   })
 })

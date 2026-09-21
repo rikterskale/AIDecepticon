@@ -54,6 +54,7 @@ describe('projection sensor control channel', () => {
     expect(health.payload.infrastructure.storage.mode).toBe(process.env.DATABASE_URL ? 'postgresql' : 'json');
     expect(health.payload.infrastructure.queue.mode).toBe(process.env.REDIS_URL ? 'redis' : 'store');
     expect(health.payload.infrastructure.scheduler).toMatchObject({ healthy: true, mode: 'scheduled' });
+    expect(health.payload.infrastructure.authentication).toMatchObject({ healthy: true, mode: 'disabled' });
   });
 
   it('refuses an undersized production command-signing key', () => {

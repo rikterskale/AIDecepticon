@@ -51,13 +51,13 @@ Status: **CI baseline implemented; release hardening in progress**
 
 ## Milestone 3 — Production control plane
 
-Status: **Persistence and resilient command delivery implemented**
+Status: **Persistence, resilient delivery, and enterprise access control implemented**
 
 - [x] PostgreSQL persistence with ordered, versioned schema migrations and safe single-runner migration locking.
 - [x] Redis-compatible sensor-command delivery queue with persistent source-of-truth recovery and local fallback.
 - [x] Bounded retry/backoff policies, dead-letter handling, scheduled acknowledgement recovery, and guided GUI remediation.
-- [ ] OIDC and SAML authentication with MFA-aware session policy.
-- [ ] Fine-grained RBAC for platform, analyst, deception engineer, auditor, and service roles.
+- [x] OIDC Authorization Code + PKCE and signed SAML authentication with Redis sessions and MFA-aware policy enforcement.
+- [x] Fine-grained RBAC for platform administrator, analyst, deception engineer, auditor, and scoped service roles.
 - [ ] Encrypted secret storage with pluggable Vault/KMS providers.
 - [ ] Immutable administrative and response audit trails.
 - [ ] Multi-tenancy and MSSP organization boundaries.
