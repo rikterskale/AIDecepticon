@@ -1,0 +1,126 @@
+openapi: 3.1.0
+info:
+  title: AIDecepticon Control Plane API
+  version: 0.1.0
+  description: API for managing deception deployments, sensors, tokens, incidents, identity domains, and integrations.
+servers:
+  - url: http://localhost:8787/api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Read service health
+      responses:
+        '200': { description: Healthy }
+  /summary:
+    get:
+      operationId: getSummary
+      summary: Read the command-center summary
+      responses:
+        '200': { description: Summary metrics }
+  /deployments:
+    get:
+      operationId: listDeployments
+      summary: List deception deployments
+      responses:
+        '200': { description: Deployment collection }
+    post:
+      operationId: createDeployment
+      summary: Deploy a deception blueprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, blueprintId, environment, location]
+              properties:
+                name: { type: string }
+                blueprintId: { type: string }
+                environment: { type: string }
+                location: { type: string }
+                mode: { type: string, enum: [agentless, cloud-native, sensor, package] }
+                customizations: { type: object }
+      responses:
+        '201': { description: Deployment accepted }
+        '400': { description: Invalid input }
+  /tokens:
+    get:
+      operationId: listTokens
+      summary: List deception tokens
+      responses:
+        '200': { description: Token collection }
+    post:
+      operationId: createToken
+      summary: Generate a canary token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                type: { type: string, enum: [document, credential, connection, cloud-key, api-key] }
+                destination: { type: string }
+                metadata: { type: object }
+      responses:
+        '201': { description: Token generated }
+  /incidents:
+    get:
+      operationId: listIncidents
+      summary: List incidents
+      responses:
+        '200': { description: Incident collection }
+  /incidents/{id}:
+    patch:
+      operationId: updateIncident
+      summary: Update incident workflow state
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string }
+                assignee: { type: string }
+      responses:
+        '200': { description: Incident updated }
+        '404': { description: Incident not found }
+  /sensors:
+    get:
+      operationId: listSensors
+      summary: List projection sensors
+      responses:
+        '200': { description: Sensor collection }
+  /domains:
+    get:
+      operationId: listDomains
+      summary: List protected identity domains
+      responses:
+        '200': { description: Domain collection }
+  /integrations:
+    get:
+      operationId: listIntegrations
+      summary: List security integrations
+      responses:
+        '200': { description: Integration collection }
+  /beacon/{tokenId}:
+    get:
+      operationId: triggerBeacon
+      summary: Trigger a deception token interaction
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Interaction recorded }
+        '404': { description: Token not found }
