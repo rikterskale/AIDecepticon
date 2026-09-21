@@ -53,6 +53,7 @@ describe('projection sensor control channel', () => {
     expect(health.payload.status).toBe('ok');
     expect(health.payload.infrastructure.storage.mode).toBe(process.env.DATABASE_URL ? 'postgresql' : 'json');
     expect(health.payload.infrastructure.queue.mode).toBe(process.env.REDIS_URL ? 'redis' : 'store');
+    expect(health.payload.infrastructure.scheduler).toMatchObject({ healthy: true, mode: 'scheduled' });
   });
 
   it('refuses an undersized production command-signing key', () => {
@@ -135,6 +136,48 @@ describe('projection sensor control channel', () => {
     expect(event.response.status).toBe(201);
     expect(event.payload.incident.confidence).toBe(99);
     expect(event.payload.incident.technique).toBe('T1190');
+  });
+
+  it('dead-letters exhausted commands and supports guided recovery actions', async () => {
+    const sensorId = `sen-recovery-${crypto.randomUUID().slice(0, 8)}`;
+    const tokenResponse = await request('/api/v1/sensor-enrollment-tokens', {
+      method: 'POST',
+      body: { label: 'Recovery test sensor' },
+    });
+    const enrollment = await request('/api/v1/sensors/enroll', {
+      method: 'POST',
+      body: { enrollmentToken: tokenResponse.payload.token, sensorId, name: 'Recovery test sensor' },
+    });
+    const accessToken = enrollment.payload.accessToken;
+    const queued = await request(`/api/v1/sensors/${sensorId}/commands`, {
+      method: 'POST',
+      body: { type: 'snapshot', maxAttempts: 1 },
+    });
+
+    const delivery = await request(`/api/v1/sensors/${sensorId}/commands`, { token: accessToken });
+    expect(delivery.payload.items[0]).toMatchObject({ id: queued.payload.id, attempts: 1, status: 'dispatched' });
+    const failed = await request(`/api/v1/sensors/${sensorId}/commands/${queued.payload.id}/ack`, {
+      method: 'POST',
+      token: accessToken,
+      body: { status: 'failed', error: 'simulated sensor failure' },
+    });
+    expect(failed.payload).toMatchObject({ status: 'dead_lettered', deadLetterReason: 'attempt_limit' });
+
+    const deadLetters = await request('/api/v1/sensor-commands?status=dead_lettered');
+    expect(deadLetters.payload.items.some((command) => command.id === queued.payload.id)).toBe(true);
+    const retried = await request(`/api/v1/sensor-commands/${queued.payload.id}/retry`, { method: 'POST' });
+    expect(retried.response.status).toBe(201);
+    expect(retried.payload.id).not.toBe(queued.payload.id);
+
+    const retryDelivery = await request(`/api/v1/sensors/${sensorId}/commands`, { token: accessToken });
+    expect(retryDelivery.payload.items[0].id).toBe(retried.payload.id);
+    await request(`/api/v1/sensors/${sensorId}/commands/${retried.payload.id}/ack`, {
+      method: 'POST',
+      token: accessToken,
+      body: { status: 'failed', error: 'simulated repeat failure' },
+    });
+    const dismissed = await request(`/api/v1/sensor-commands/${retried.payload.id}/dismiss`, { method: 'POST' });
+    expect(dismissed.payload.status).toBe('dismissed');
   });
 
   it('rejects reuse of an enrollment token and unauthenticated sensor requests', async () => {

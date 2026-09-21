@@ -20,6 +20,11 @@ function safeEqual(left, right) {
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function boundedNumber(value, fallback, minimum, maximum) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, minimum), maximum) : fallback;
+}
+
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
@@ -66,6 +71,8 @@ export async function createSensorCommand(store, commandQueue, sensorId, input =
   if (!allowedCommandTypes.has(input.type)) return { error: 'Unsupported sensor command type', status: 400 };
 
   const issuedAt = new Date();
+  const maxAttempts = Math.trunc(boundedNumber(input.maxAttempts, 3, 1, 10));
+  const retryBackoffSeconds = boundedNumber(input.retryBackoffSeconds, 15, 5, 300);
   const command = {
     id: `cmd-${crypto.randomUUID().slice(0, 12)}`,
     sensorId,
@@ -74,6 +81,10 @@ export async function createSensorCommand(store, commandQueue, sensorId, input =
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + 5 * 60_000).toISOString(),
     status: 'queued',
+    attempts: 0,
+    maxAttempts,
+    retryBackoffSeconds,
+    nextAttemptAt: issuedAt.toISOString(),
   };
   command.signature = signSensorCommand(command);
   const persisted = await store.add('sensorCommands', command);
@@ -104,10 +115,50 @@ function techniqueFor(protocol) {
   })[protocol] || 'T1046';
 }
 
-export function installSensorRoutes(app, { store, commandQueue, requireControlPlaneKey }) {
+export function installSensorRoutes(app, { store, commandQueue, commandScheduler, requireControlPlaneKey }) {
   assertSensorSecurityConfiguration();
 
   const requireSensor = authorizeSensor(store);
+
+  app.get('/api/v1/sensor-commands', requireControlPlaneKey, async (request, response) => {
+    const requestedStatuses = String(request.query.status || '').split(',').map((status) => status.trim()).filter(Boolean);
+    const commands = await store.read('sensorCommands');
+    const items = requestedStatuses.length
+      ? commands.filter((command) => requestedStatuses.includes(command.status))
+      : commands;
+    response.json({ items });
+  });
+
+  app.post('/api/v1/sensor-commands/:commandId/retry', requireControlPlaneKey, async (request, response) => {
+    const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
+    if (!original) return response.status(404).json({ error: 'Command not found' });
+    if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be retried' });
+    const result = await createSensorCommand(store, commandQueue, original.sensorId, {
+      type: original.type,
+      payload: original.payload,
+      maxAttempts: original.maxAttempts,
+      retryBackoffSeconds: original.retryBackoffSeconds,
+    });
+    if (result.error) return response.status(result.status).json({ error: result.error });
+    await store.update('sensorCommands', original.id, {
+      status: 'retried',
+      retriedAt: new Date().toISOString(),
+      retriedAs: result.command.id,
+    });
+    response.status(201).json(result.command);
+  });
+
+  app.post('/api/v1/sensor-commands/:commandId/dismiss', requireControlPlaneKey, async (request, response) => {
+    const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
+    if (!original) return response.status(404).json({ error: 'Command not found' });
+    if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be dismissed' });
+    const dismissed = await store.update('sensorCommands', original.id, {
+      status: 'dismissed',
+      dismissedAt: new Date().toISOString(),
+    });
+    await commandQueue.remove(original.sensorId, original.id);
+    response.json(dismissed);
+  });
 
   app.post('/api/v1/sensor-enrollment-tokens', requireControlPlaneKey, async (request, response) => {
     const ttlMinutes = Math.min(Math.max(Number(request.body?.ttlMinutes || 15), 5), 60);
@@ -189,7 +240,8 @@ export function installSensorRoutes(app, { store, commandQueue, requireControlPl
   });
 
   app.get('/api/v1/sensors/:sensorId/commands', requireSensor, async (request, response) => {
-    const commands = await commandQueue.pending(request.params.sensorId);
+    await commandScheduler.runOnce();
+    const commands = await commandQueue.dispatch(request.params.sensorId);
     response.json({ items: commands });
   });
 
@@ -203,13 +255,16 @@ export function installSensorRoutes(app, { store, commandQueue, requireControlPl
     const command = (await store.read('sensorCommands')).find((candidate) => candidate.id === request.params.commandId && candidate.sensorId === request.params.sensorId);
     if (!command) return response.status(404).json({ error: 'Command not found' });
     const status = request.body?.status === 'failed' ? 'failed' : 'acknowledged';
-    const updated = await store.update('sensorCommands', command.id, {
-      status,
-      acknowledgedAt: new Date().toISOString(),
-      output: request.body?.output || null,
-      error: status === 'failed' ? String(request.body?.error || 'Sensor command failed').slice(0, 1000) : null,
-    });
-    await commandQueue.acknowledge(request.params.sensorId, command.id);
+    const error = status === 'failed' ? String(request.body?.error || 'Sensor command failed').slice(0, 1000) : null;
+    const updated = status === 'failed'
+      ? await commandQueue.fail(command, error)
+      : await store.update('sensorCommands', command.id, {
+        status,
+        acknowledgedAt: new Date().toISOString(),
+        output: request.body?.output || null,
+        error,
+      });
+    if (status === 'acknowledged') await commandQueue.acknowledge(request.params.sensorId, command.id);
     response.json(updated);
   });
 

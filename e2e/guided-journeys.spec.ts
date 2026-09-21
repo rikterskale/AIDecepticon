@@ -54,4 +54,35 @@ test.describe('guided operator journeys', () => {
     await expect(modal.getByText('Run in the target segment')).toBeVisible()
     await expect(modal.getByText(/AID_ENROLLMENT_TOKEN=/)).toBeVisible()
   })
+
+  test('recovers a dead-lettered sensor command through protected surfaces', async ({ page, request }) => {
+    const sensorId = `sen-browser-recovery-${Date.now()}`
+    const tokenResponse = await request.post('http://127.0.0.1:8787/api/v1/sensor-enrollment-tokens', {
+      data: { label: 'Browser recovery sensor' },
+    })
+    const token = await tokenResponse.json()
+    const enrollmentResponse = await request.post('http://127.0.0.1:8787/api/v1/sensors/enroll', {
+      data: { enrollmentToken: token.token, sensorId, name: 'Browser recovery sensor' },
+    })
+    const enrollment = await enrollmentResponse.json()
+    const commandResponse = await request.post(`http://127.0.0.1:8787/api/v1/sensors/${sensorId}/commands`, {
+      data: { type: 'snapshot', maxAttempts: 1 },
+    })
+    const command = await commandResponse.json()
+    await request.get(`http://127.0.0.1:8787/api/v1/sensors/${sensorId}/commands`, {
+      headers: { Authorization: `Bearer ${enrollment.accessToken}` },
+    })
+    await request.post(`http://127.0.0.1:8787/api/v1/sensors/${sensorId}/commands/${command.id}/ack`, {
+      headers: { Authorization: `Bearer ${enrollment.accessToken}` },
+      data: { status: 'failed', error: 'browser recovery test failure' },
+    })
+
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Protected surfaces' }).click()
+    const recovery = page.locator('.command-recovery-panel')
+    await expect(recovery.getByRole('heading', { name: 'Command dead-letter queue' })).toBeVisible()
+    await expect(recovery.getByText('browser recovery test failure')).toBeVisible()
+    await recovery.getByRole('button', { name: 'Retry' }).click()
+    await expect(recovery.getByText('No commands need attention')).toBeVisible()
+  })
 })

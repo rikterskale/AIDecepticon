@@ -62,7 +62,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, Sensor, Summary } from './types'
+import type { Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -380,7 +380,7 @@ function IncidentsPage({ incidents, onSelect }: { incidents: Incident[]; onSelec
   )
 }
 
-function SurfacesPage({ domains, sensors, onDeploy, onAddSensor }: { domains: Domain[]; sensors: Sensor[]; onDeploy: (id?: BlueprintId) => void; onAddSensor: () => void }) {
+function SurfacesPage({ domains, sensors, deadLetters, onDeploy, onAddSensor, onRetryCommand, onDismissCommand }: { domains: Domain[]; sensors: Sensor[]; deadLetters: SensorCommand[]; onDeploy: (id?: BlueprintId) => void; onAddSensor: () => void; onRetryCommand: (command: SensorCommand) => void; onDismissCommand: (command: SensorCommand) => void }) {
   return (
     <div className="surfaces-grid">
       <section className="panel identity-panel">
@@ -411,6 +411,13 @@ function SurfacesPage({ domains, sensors, onDeploy, onAddSensor }: { domains: Do
       <section className="panel sensor-panel-wide">
         <header className="panel__header"><div><span className="eyebrow">Agentless projection fabric</span><h3>Deployment sensors</h3></div><button className="button button--small" onClick={onAddSensor}><Plus size={15} /> Add sensor</button></header>
         <div className="sensor-cards">{sensors.map((sensor) => <article key={sensor.id}><div className="sensor-card__top"><span><Radio size={17} /></span><StatusDot tone={sensor.health > 90 ? 'healthy' : 'attention'} /></div><strong>{sensor.name}</strong><small>{sensor.type} · v{sensor.version}</small><div className="sensor-stats"><span><strong>{sensor.health}%</strong> health</span><span><strong>{sensor.latency}ms</strong> latency</span></div><footer><span>{sensor.address}</span><span>{sensor.lastSeen}</span></footer></article>)}</div>
+      </section>
+
+      <section className="panel command-recovery-panel">
+        <header className="panel__header"><div><span className="eyebrow">Guided recovery</span><h3>Command dead-letter queue</h3></div><span className={cx('recovery-count', deadLetters.length > 0 && 'attention')}>{deadLetters.length}</span></header>
+        {deadLetters.length === 0
+          ? <div className="recovery-empty"><ShieldCheck size={20} /><span><strong>No commands need attention</strong><small>Exhausted and expired sensor commands appear here with guided recovery actions.</small></span></div>
+          : <div className="recovery-list">{deadLetters.map((command) => <article key={command.id}><span className="severity-orb severity-orb--high"><AlertTriangle size={15} /></span><div><strong>{command.type.replaceAll('_', ' ')}</strong><small>{command.sensorId} · {command.attempts}/{command.maxAttempts} attempts · {command.error || command.deadLetterReason}</small></div><button className="button button--small" onClick={() => onRetryCommand(command)}><RefreshCw size={13} /> Retry</button><button className="icon-button" aria-label={`Dismiss ${command.id}`} onClick={() => onDismissCommand(command)}><X size={14} /></button></article>)}</div>}
       </section>
     </div>
   )
@@ -619,6 +626,7 @@ function App() {
   const [deployments, setDeployments] = useState(fallbackDeployments)
   const [incidents, setIncidents] = useState(fallbackIncidents)
   const [sensors, setSensors] = useState(fallbackSensors)
+  const [deadLetters, setDeadLetters] = useState<SensorCommand[]>([])
   const [domains, setDomains] = useState(fallbackDomains)
   const [integrations, setIntegrations] = useState(fallbackIntegrations)
 
@@ -628,10 +636,11 @@ function App() {
       apiGet<{ items: Deployment[] }>('deployments', { items: fallbackDeployments }),
       apiGet<{ items: Incident[] }>('incidents', { items: fallbackIncidents }),
       apiGet<{ items: Sensor[] }>('sensors', { items: fallbackSensors }),
+      apiGet<{ items: SensorCommand[] }>('sensor-commands?status=dead_lettered', { items: [] }),
       apiGet<{ items: Domain[] }>('domains', { items: fallbackDomains }),
       apiGet<{ items: Integration[] }>('integrations', { items: fallbackIntegrations }),
-    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDomains, nextIntegrations]) => {
-      setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items)
+    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations]) => {
+      setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items)
     })
   }, [])
 
@@ -644,6 +653,24 @@ function App() {
   const pageMeta = titleMap[page]
   const activeDeployments = useMemo(() => deployments.filter((deployment) => deployment.status !== 'provisioning').length, [deployments])
   const navigate = (destination: PageId) => { setPage(destination); setSidebarOpen(false) }
+  const retryCommand = async (command: SensorCommand) => {
+    try {
+      await apiPost<SensorCommand>(`sensor-commands/${command.id}/retry`, {})
+      setDeadLetters((current) => current.filter((item) => item.id !== command.id))
+      setToast(`${command.type.replaceAll('_', ' ')} command queued for another delivery`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Command retry failed')
+    }
+  }
+  const dismissCommand = async (command: SensorCommand) => {
+    try {
+      await apiPost<SensorCommand>(`sensor-commands/${command.id}/dismiss`, {})
+      setDeadLetters((current) => current.filter((item) => item.id !== command.id))
+      setToast('Dead-lettered command dismissed')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Command dismissal failed')
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -678,7 +705,7 @@ function App() {
           {page === 'overview' && <OverviewPage summary={summary} incidents={incidents} sensors={sensors} onDeploy={() => setWizard({ open: true })} onIncident={setSelectedIncident} onNavigate={navigate} />}
           {page === 'mesh' && <MeshPage deployments={deployments} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onToken={() => setTokenModal(true)} />}
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
-          {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} />}
+          {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
           {page === 'system' && <SystemPage sensors={sensors} onToast={setToast} />}
         </main>

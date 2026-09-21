@@ -23,6 +23,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - Canary generation for fake files, credentials, cloud keys, API keys, and connections.
 - A persistent REST control-plane API and downloadable OpenAPI 3.1 contract.
 - Optional PostgreSQL persistence with ordered schema migrations and a Redis-compatible durable sensor-command queue.
+- Bounded sensor-command retries with exponential backoff, scheduled acknowledgement recovery, and a GUI-operated dead-letter queue.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -85,6 +86,8 @@ With no infrastructure variables set, AIDecepticon uses its owner-readable JSON 
 
 For fleet deployments, set `DATABASE_URL` and `REDIS_URL`. PostgreSQL becomes the source of truth for all resources and automatically applies the ordered migrations in `server/migrations`. Redis provides low-latency command delivery; queued commands remain recoverable from PostgreSQL if Redis is restarted or temporarily unavailable. Use `DATABASE_SSL=require` for a remote database and a `rediss://` URL for Redis over TLS.
 
+Each sensor command is claimed for one delivery attempt. Failed or unacknowledged attempts are rescheduled with bounded exponential backoff; expired commands and commands that exhaust their attempt limit move to the dead-letter queue. Operators can review, retry as a new signed command, or dismiss those commands from **Protected surfaces → Command dead-letter queue**. `COMMAND_SCHEDULER_INTERVAL_MS` controls the recovery sweep interval and defaults to five seconds.
+
 ## Operator journey
 
 1. Open **Command center** to review coverage, live signals, incident confidence, and sensor health.
@@ -136,7 +139,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, cross-language signing compatibility, PostgreSQL migrations, and Redis-backed command delivery.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, PostgreSQL migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 

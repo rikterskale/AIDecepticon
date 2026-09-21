@@ -66,6 +66,18 @@ export interface Sensor {
   lastSeenAt?: string
 }
 
+export interface SensorCommand {
+  id: string
+  sensorId: string
+  type: string
+  status: string
+  attempts: number
+  maxAttempts: number
+  error?: string
+  deadLetterReason?: string
+  deadLetteredAt?: string
+}
+
 export interface Domain {
   id: string
   name: string

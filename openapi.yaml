@@ -3,8 +3,12 @@ info:
   title: AIDecepticon Control Plane API
   version: 0.1.0
   description: API for managing deception deployments, sensors, tokens, incidents, identity domains, and integrations.
+  license:
+    name: MIT
+    identifier: MIT
 servers:
   - url: http://localhost:8787/api/v1
+security: []
 paths:
   /health:
     get:
@@ -109,6 +113,42 @@ paths:
       summary: List projection sensors
       responses:
         '200': { description: Sensor collection }
+  /sensor-commands:
+    get:
+      operationId: listSensorCommands
+      summary: List sensor commands, optionally filtered by lifecycle state
+      security:
+        - controlPlaneBearer: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        '200': { description: Sensor command collection }
+  /sensor-commands/{commandId}/retry:
+    post:
+      operationId: retrySensorCommand
+      summary: Replace a dead-lettered command with a new signed delivery
+      security:
+        - controlPlaneBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '201': { description: Replacement command queued }
+        '404': { description: Command not found }
+        '409': { description: Command is not dead-lettered }
+  /sensor-commands/{commandId}/dismiss:
+    post:
+      operationId: dismissSensorCommand
+      summary: Dismiss a dead-lettered command after operator review
+      security:
+        - controlPlaneBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '200': { description: Command dismissed }
+        '404': { description: Command not found }
+        '409': { description: Command is not dead-lettered }
   /sensor-enrollment-tokens:
     post:
       operationId: createSensorEnrollmentToken
@@ -149,7 +189,7 @@ paths:
                   items: { type: string }
       responses:
         '201': { description: Sensor enrolled; credentials are returned once }
-        '401': { description: Token invalid, expired, or used }
+        '401': { description: "Token invalid, expired, or used" }
         '409': { description: Sensor ID already exists }
   /sensors/{sensorId}/heartbeat:
     post:
@@ -204,6 +244,8 @@ paths:
               properties:
                 type: { type: string, enum: [deploy_decoy, stop_decoy, snapshot] }
                 payload: { type: object }
+                maxAttempts: { type: integer, minimum: 1, maximum: 10, default: 3 }
+                retryBackoffSeconds: { type: integer, minimum: 5, maximum: 300, default: 15 }
       responses:
         '201': { description: Signed command queued }
         '404': { description: Sensor not found }
@@ -300,10 +342,11 @@ components:
         time: { type: string, format: date-time }
         infrastructure:
           type: object
-          required: [storage, queue]
+          required: [storage, queue, scheduler]
           properties:
             storage: { $ref: '#/components/schemas/InfrastructureHealth' }
             queue: { $ref: '#/components/schemas/InfrastructureHealth' }
+            scheduler: { $ref: '#/components/schemas/InfrastructureHealth' }
   securitySchemes:
     controlPlaneBearer:
       type: http
@@ -316,6 +359,11 @@ components:
   parameters:
     SensorId:
       name: sensorId
+      in: path
+      required: true
+      schema: { type: string }
+    CommandId:
+      name: commandId
       in: path
       required: true
       schema: { type: string }

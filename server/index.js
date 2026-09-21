@@ -5,13 +5,14 @@ import express from 'express';
 import cors from 'cors';
 import { store } from './store.js';
 import { installSensorRoutes, publicSensor } from './sensor-api.js';
-import { createCommandQueue } from './command-queue.js';
+import { createCommandQueue, createCommandScheduler } from './command-queue.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 const controlPlaneApiKey = process.env.CONTROL_PLANE_API_KEY;
 const commandQueue = createCommandQueue(store);
+const commandScheduler = createCommandScheduler(store, commandQueue);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
 
@@ -35,16 +36,17 @@ function requireControlPlaneKey(request, response, next) {
   response.status(401).json({ error: 'A valid control-plane bearer token is required' });
 }
 
-installSensorRoutes(app, { store, commandQueue, requireControlPlaneKey });
+installSensorRoutes(app, { store, commandQueue, commandScheduler, requireControlPlaneKey });
 
 app.get('/api/v1/health', async (_request, response) => {
   const [storage, queue] = await Promise.all([store.health(), commandQueue.health()]);
-  const healthy = storage.healthy && queue.healthy;
+  const scheduler = commandScheduler.health();
+  const healthy = storage.healthy && queue.healthy && scheduler.healthy;
   response.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     version: '0.1.0',
     time: new Date().toISOString(),
-    infrastructure: { storage, queue },
+    infrastructure: { storage, queue, scheduler },
   });
 });
 
@@ -155,9 +157,12 @@ let server;
 export async function initializeInfrastructure() {
   await store.init();
   await commandQueue.init();
+  await commandScheduler.runOnce();
+  commandScheduler.start();
 }
 
 export async function closeInfrastructure() {
+  commandScheduler.close();
   await Promise.allSettled([commandQueue.close(), store.close()]);
 }
 
@@ -183,4 +188,4 @@ if (process.env.NODE_ENV !== 'test') {
   process.once('SIGINT', shutdown);
 }
 
-export { app, commandQueue };
+export { app, commandQueue, commandScheduler };
