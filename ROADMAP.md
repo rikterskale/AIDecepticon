@@ -27,7 +27,7 @@ Status: **MVP implemented; production hardening in progress**
 - [x] Local encrypted-transport enforcement for non-loopback control-plane URLs.
 - [x] Container packaging and non-root runtime.
 - [x] Unit and integration tests for enrollment, command signing, polling, acknowledgement, and telemetry.
-- [ ] Signed release binaries for Windows, Linux, and macOS.
+- [x] Sigstore-attested release binaries for Windows, Linux, and macOS with embedded versions and checksums.
 - [ ] Controller-driven upgrade and rollback.
 - [ ] TPM/Keychain/libsecret-backed sensor credential storage.
 - [ ] Production certificate authority integration and automatic mTLS certificate rotation.
@@ -42,8 +42,8 @@ Status: **CI baseline implemented; release hardening in progress**
 - [x] Container build verification for the control plane and projection sensor.
 - [x] CodeQL analysis for JavaScript/TypeScript and Go.
 - [x] Dependabot coverage for npm, Go modules, and GitHub Actions.
-- [ ] Playwright end-to-end tests covering every guided GUI journey.
-- [ ] SBOM generation and artifact provenance attestations.
+- [x] Playwright end-to-end tests covering deployment, canary creation, and projection-sensor enrollment journeys.
+- [x] SPDX SBOM generation and Sigstore-backed provenance/SBOM attestations for sensor releases.
 - [ ] Signed containers and release binaries with verification instructions.
 - [ ] Branch protection with required CI and security checks.
 - [ ] Architecture decision records and a maintained threat model.

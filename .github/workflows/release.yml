@@ -1,0 +1,104 @@
+name: Sensor Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: aidecepticon-sensor-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset: aidecepticon-sensor-linux-arm64
+          - goos: windows
+            goarch: amd64
+            asset: aidecepticon-sensor-windows-amd64.exe
+          - goos: darwin
+            goarch: amd64
+            asset: aidecepticon-sensor-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset: aidecepticon-sensor-darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sensor/go.mod
+          cache-dependency-path: sensor/go.mod
+      - name: Test sensor
+        working-directory: sensor
+        run: go test ./...
+      - name: Build release binary
+        env:
+          ASSET: ${{ matrix.asset }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p release
+          cd sensor
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "../release/${ASSET}" ./cmd/aidecepticon-sensor
+          cd ..
+          cd release
+          sha256sum "${ASSET}" > "${ASSET}.sha256"
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          file: release/${{ matrix.asset }}
+          format: spdx-json
+          output-file: release/${{ matrix.asset }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: release/${{ matrix.asset }}
+      - name: Attest SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: release/${{ matrix.asset }}
+          sbom-path: release/${{ matrix.asset }}.spdx.json
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensor-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sensor-*
+          path: release
+          merge-multiple: true
+      - name: Publish assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* --verify-tag --generate-notes --title "AIDecepticon ${GITHUB_REF_NAME}"
+          fi

@@ -118,11 +118,14 @@ Implemented resources include:
 
 Projection sensors are enrolled entirely through **Protected surfaces → Add sensor**. The guided workflow creates a short-lived, single-use token and provides deployment commands. See [sensor/README.md](sensor/README.md) for the runtime security model and configuration reference.
 
+Version tags matching `v*` produce checksum-pinned Windows, Linux, and macOS sensor binaries, SPDX SBOMs, and GitHub/Sigstore provenance attestations.
+
 ## Development
 
 ```bash
 npm run check
 npm test
+npm run test:e2e
 npm run build
 ```
 

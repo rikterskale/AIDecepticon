@@ -25,6 +25,15 @@ Or build the non-root container:
 docker build -t aidecepticon-sensor ./sensor
 ```
 
+Tagged releases publish attested binaries for Windows, Linux, and macOS on AMD64 and ARM64 where supported. Verify the downloaded binary's checksum and its Sigstore-backed GitHub provenance before running it:
+
+```bash
+sha256sum --check aidecepticon-sensor-linux-amd64.sha256
+gh attestation verify aidecepticon-sensor-linux-amd64 --repo rikterskale/AIDecepticon
+```
+
+Each binary also ships with an SPDX JSON SBOM. Release builds embed the tag as the sensor version reported to the controller.
+
 ## Enroll
 
 Create a one-time enrollment token from **Protected surfaces → Add sensor** in the GUI, then run:
