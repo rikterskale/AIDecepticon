@@ -63,7 +63,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, Sensor, SensorCommand, Summary } from './types'
+import type { AuditResponse, AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -454,8 +454,11 @@ function IntegrationsPage({ integrations, onToast }: { integrations: Integration
   )
 }
 
-function SystemPage({ sensors, auth, onToast }: { sensors: Sensor[]; auth: AuthSession; onToast: (message: string) => void }) {
+function SystemPage({ sensors, auth, secrets, audit, onAddSecret, onRotateSecret, onVerifySecret, onToast }: { sensors: Sensor[]; auth: AuthSession; secrets: SecretRecord[]; audit: AuditResponse; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onToast: (message: string) => void }) {
   const curl = `curl -X POST http://localhost:8787/api/v1/tokens \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"name":"Quarterly plan","type":"document"}'`
+  const canWriteSecrets = auth.permissions.includes('*') || auth.permissions.includes('secret:write')
+  const canReadSecrets = canWriteSecrets || auth.permissions.includes('secret:read')
+  const canReadAudit = auth.permissions.includes('*') || auth.permissions.includes('audit:read')
   return (
     <div className="system-layout">
       <section className="panel platform-health">
@@ -471,19 +474,58 @@ function SystemPage({ sensors, auth, onToast }: { sensors: Sensor[]; auth: AuthS
         <header className="panel__header"><div><span className="eyebrow">Complete developer interface</span><h3>REST API</h3></div><a className="button button--small" href="/openapi.yaml" target="_blank">OpenAPI spec <ExternalLink size={14} /></a></header>
         <p>Everything available in the GUI is designed around an auditable API surface for automation, Terraform providers, and SOC workflows.</p>
         <div className="code-window"><div><span className="code-dot code-dot--red" /><span className="code-dot code-dot--amber" /><span className="code-dot code-dot--green" /><small>Generate a canary token</small><button onClick={() => { navigator.clipboard?.writeText(curl); onToast('API example copied') }}><Clipboard size={14} /> Copy</button></div><pre>{curl}</pre></div>
-        <div className="api-resources">{['Deployments', 'Canary tokens', 'Incidents', 'Sensors', 'Domains', 'Integrations'].map((item) => <span key={item}><Check size={13} /> {item}</span>)}</div>
+        <div className="api-resources">{['Deployments', 'Canary tokens', 'Incidents', 'Sensors', 'Secrets', 'Audit events'].map((item) => <span key={item}><Check size={13} /> {item}</span>)}</div>
       </section>
       <section className="panel access-panel">
         <header className="panel__header"><div><span className="eyebrow">Secure by default</span><h3>Access & governance</h3></div><button className="icon-button"><Settings2 size={16} /></button></header>
         <div className="setting-rows">
           <div><span><LockKeyhole size={17} /></span><div><strong>Single sign-on</strong><small>{auth.enabled ? `${auth.user?.provider.toUpperCase()} session${auth.user?.mfa ? ' · MFA verified' : ''}` : 'Development mode · external identity disabled'}</small></div><StatusPill status={auth.enabled ? 'healthy' : 'learning'} /></div>
           <div><span><UserRoundCog size={17} /></span><div><strong>Role-based access</strong><small>{auth.user?.role.replaceAll('_', ' ')} · {auth.permissions.includes('*') ? 'Full access' : `${auth.permissions.length} permissions`}</small></div><ChevronRight size={16} /></div>
-          <div><span><Clipboard size={17} /></span><div><strong>Audit trail</strong><small>Immutable administration events</small></div><ChevronRight size={16} /></div>
-          <div><span><KeyRound size={17} /></span><div><strong>API credentials</strong><small>3 service principals</small></div><ChevronRight size={16} /></div>
+          <div><span><Clipboard size={17} /></span><div><strong>Audit trail</strong><small>{canReadAudit ? (audit.verification.valid ? `${audit.verification.checked} events · chain verified` : 'Integrity verification needs attention') : 'Restricted to administrators and auditors'}</small></div><StatusPill status={canReadAudit && audit.verification.valid ? 'healthy' : 'learning'} /></div>
+          <div><span><KeyRound size={17} /></span><div><strong>Encrypted secrets</strong><small>{canReadSecrets ? `${secrets.length} protected credentials · plaintext never listed` : 'Metadata access is restricted by role'}</small></div><ChevronRight size={16} /></div>
         </div>
+      </section>
+      <section className="panel secret-vault-panel">
+        <header className="panel__header"><div><span className="eyebrow">Envelope encryption</span><h3>Secret vault</h3></div>{canWriteSecrets && <button className="button button--small" onClick={onAddSecret}><Plus size={14} /> Add secret</button>}</header>
+        <p>Store SIEM, SOAR, EDR, cloud, and identity credentials behind local AES-256-GCM, Vault Transit, or AWS KMS. Operators see metadata only.</p>
+        {!canReadSecrets
+          ? <div className="access-restricted"><LockKeyhole size={20} /><span><strong>Secret metadata is restricted</strong><small>Your role cannot enumerate protected provider credentials.</small></span></div>
+          : secrets.length === 0
+          ? <div className="vault-empty"><LockKeyhole size={20} /><span><strong>No encrypted credentials yet</strong><small>Add the first provider credential through the guided vault workflow.</small></span>{canWriteSecrets && <button className="card-action" onClick={onAddSecret}>Add secret <ArrowRight size={13} /></button>}</div>
+          : <div className="vault-list">{secrets.map((secret) => <article key={secret.id}><span><KeyRound size={16} /></span><div><strong>{secret.name}</strong><small>{secret.description || `${secret.type} credential`} · fp:{secret.fingerprint}</small></div><div className="vault-provider"><b>{secret.provider.replace('-', ' ')}</b><small>{secret.keyId}</small></div>{canWriteSecrets && <><button className="button button--small" onClick={() => onVerifySecret(secret)}><ShieldCheck size={13} /> Verify</button><button className="icon-button" aria-label={`Rotate ${secret.name}`} onClick={() => onRotateSecret(secret)}><RefreshCw size={14} /></button></>}</article>)}</div>}
+      </section>
+      <section className="panel audit-panel">
+        <header className="panel__header"><div><span className="eyebrow">Tamper-evident governance</span><h3>Administrative audit chain</h3></div><span className={cx('chain-state', canReadAudit && audit.verification.valid && 'verified')}>{canReadAudit && audit.verification.valid ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{canReadAudit ? (audit.verification.valid ? 'Chain verified' : 'Verification failed') : 'Access restricted'}</span></header>
+        {canReadAudit && <div className="audit-chain-summary"><div><span>Events checked</span><strong>{audit.verification.checked}</strong></div><div><span>Chain head</span><code>{audit.verification.headHash?.slice(0, 18) || 'No events yet'}</code></div><div><span>Protection</span><strong>HMAC-SHA256</strong></div></div>}
+        {!canReadAudit
+          ? <div className="access-restricted"><Fingerprint size={20} /><span><strong>Audit evidence is restricted</strong><small>Your role cannot review administrative events or integrity proofs.</small></span></div>
+          : audit.items.length === 0
+          ? <div className="audit-empty"><Fingerprint size={20} /> Administrative actions will appear here with actor, outcome, and integrity proof.</div>
+          : <div className="audit-list">{audit.items.slice(0, 8).map((event) => <article key={event.id}><span className={cx('audit-outcome', `audit-outcome--${event.outcome}`)}>{event.outcome === 'success' ? <Check size={13} /> : <AlertTriangle size={13} />}</span><div><strong>{event.action.replaceAll('.', ' ')}</strong><small>{event.actor.displayName || event.actor.id} · {event.target.type}:{event.target.id}</small></div><code>{event.hash.slice(0, 12)}</code><time>{new Date(event.occurredAt).toLocaleString()}</time></article>)}</div>}
       </section>
     </div>
   )
+}
+
+function SecretModal({ existing, onClose, onComplete }: { existing?: SecretRecord; onClose: () => void; onComplete: (secret: SecretRecord) => void }) {
+  const [name, setName] = useState(existing?.name || '')
+  const [type, setType] = useState<SecretRecord['type']>(existing?.type || 'integration')
+  const [description, setDescription] = useState(existing?.description || '')
+  const [value, setValue] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async () => {
+    setLoading(true); setError('')
+    try {
+      const secret = existing
+        ? await apiPost<SecretRecord>(`secrets/${existing.id}/rotate`, { value })
+        : await apiPost<SecretRecord>('secrets', { name, type, description, value })
+      onComplete(secret)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to protect this secret')
+    } finally { setLoading(false) }
+  }
+  return <div className="modal-backdrop"><section className="simple-modal secret-modal" role="dialog" aria-modal="true" aria-label={existing ? `Rotate ${existing.name}` : 'Add encrypted secret'}><header><div className="modal-title-icon"><LockKeyhole size={20} /></div><div><span className="eyebrow">Guided secret vault</span><h2>{existing ? `Rotate ${existing.name}` : 'Protect a provider credential'}</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header><div className="token-form"><p>The plaintext is encrypted immediately and is never returned by listing APIs or written to the audit trail.</p>{!existing && <><label><span>Display name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Splunk HEC production" /></label><div className="form-row"><label><span>Credential type</span><select value={type} onChange={(event) => setType(event.target.value as SecretRecord['type'])}><option value="integration">SOC integration</option><option value="cloud">Cloud provider</option><option value="identity">Identity provider</option><option value="response">Response provider</option><option value="api">API credential</option></select></label><label><span>Description</span><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose and approved scope" /></label></div></>}<label><span>{existing ? 'Replacement secret value' : 'Secret value'}</span><input type="password" autoFocus={Boolean(existing)} autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} /></label><div className="sensor-security-list"><span><LockKeyhole size={16} /><b>Encrypted at rest</b>Provider-backed authenticated encryption.</span><span><Eye size={16} /><b>No plaintext reads</b>Verification occurs entirely server-side.</span><span><Fingerprint size={16} /><b>Audited lifecycle</b>Creation, rotation, and checks are chained.</span></div>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary full" disabled={!value || (!existing && !name.trim()) || loading} onClick={submit}>{loading ? <RefreshCw className="spin" size={16} /> : <ShieldCheck size={16} />} {existing ? 'Rotate encrypted value' : 'Encrypt & store secret'}</button></div></section></div>
 }
 
 interface DeployForm {
@@ -630,6 +672,9 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const [deadLetters, setDeadLetters] = useState<SensorCommand[]>([])
   const [domains, setDomains] = useState(fallbackDomains)
   const [integrations, setIntegrations] = useState(fallbackIntegrations)
+  const [secrets, setSecrets] = useState<SecretRecord[]>([])
+  const [audit, setAudit] = useState<AuditResponse>({ items: [], verification: { valid: true, checked: 0 } })
+  const [secretModal, setSecretModal] = useState<{ open: boolean; existing?: SecretRecord }>({ open: false })
 
   useEffect(() => {
     Promise.all([
@@ -640,8 +685,10 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       apiGet<{ items: SensorCommand[] }>('sensor-commands?status=dead_lettered', { items: [] }),
       apiGet<{ items: Domain[] }>('domains', { items: fallbackDomains }),
       apiGet<{ items: Integration[] }>('integrations', { items: fallbackIntegrations }),
-    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations]) => {
-      setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items)
+      apiGet<{ items: SecretRecord[] }>('secrets', { items: [] }),
+      apiGet<AuditResponse>('audit-events?limit=50', { items: [], verification: { valid: true, checked: 0 } }),
+    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit]) => {
+      setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items); setSecrets(nextSecrets.items); setAudit(nextAudit)
     })
   }, [])
 
@@ -672,6 +719,20 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Command dismissal failed')
     }
+  }
+  const refreshAudit = async () => setAudit(await apiGet<AuditResponse>('audit-events?limit=50', audit))
+  const verifySecret = async (secret: SecretRecord) => {
+    try {
+      const result = await apiPost<{ verified: boolean; provider: string }>(`secrets/${secret.id}/verify`, {})
+      setToast(result.verified ? `${secret.name} decrypted and matched its integrity fingerprint` : `${secret.name} failed integrity verification`)
+      await refreshAudit()
+    } catch (error) { setToast(error instanceof Error ? error.message : 'Secret verification failed') }
+  }
+  const completeSecret = async (secret: SecretRecord) => {
+    setSecrets((current) => [secret, ...current.filter((item) => item.id !== secret.id)])
+    setSecretModal({ open: false })
+    setToast(`${secret.name} is protected by ${secret.provider.replace('-', ' ')}`)
+    await refreshAudit()
   }
 
   return (
@@ -709,13 +770,14 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
           {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
-          {page === 'system' && <SystemPage sensors={sensors} auth={auth} onToast={setToast} />}
+          {page === 'system' && <SystemPage sensors={sensors} auth={auth} secrets={secrets} audit={audit} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onToast={setToast} />}
         </main>
       </div>
 
       {wizard.open && <DeployWizard initialBlueprint={wizard.blueprint} onClose={() => setWizard({ open: false })} onComplete={(deployment) => { setDeployments((current) => [deployment, ...current]); setWizard({ open: false }); setToast(`${deployment.name} is provisioning`) }} />}
       {tokenModal && <TokenModal onClose={() => setTokenModal(false)} onComplete={setToast} />}
       {sensorModal && <SensorEnrollmentModal onClose={() => setSensorModal(false)} onToast={setToast} />}
+      {secretModal.open && <SecretModal existing={secretModal.existing} onClose={() => setSecretModal({ open: false })} onComplete={completeSecret} />}
       {selectedIncident && <IncidentDrawer incident={selectedIncident} onClose={() => setSelectedIncident(null)} onUpdate={(updated) => { setIncidents((current) => current.map((item) => item.id === updated.id ? updated : item)); setSelectedIncident(updated); setToast(`Incident ${updated.id} updated`) }} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>

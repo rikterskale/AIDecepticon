@@ -7,6 +7,8 @@ import { store } from './store.js';
 import { installSensorRoutes, publicSensor } from './sensor-api.js';
 import { createCommandQueue, createCommandScheduler } from './command-queue.js';
 import { createAuthController } from './auth.js';
+import { createSecretManager, publicSecret } from './secret-manager.js';
+import { createAuditTrail } from './audit.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -14,6 +16,8 @@ const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 const commandQueue = createCommandQueue(store);
 const commandScheduler = createCommandScheduler(store, commandQueue);
 const authController = createAuthController();
+const secretManager = createSecretManager();
+const auditTrail = createAuditTrail(store);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
 
@@ -31,20 +35,22 @@ app.use((_request, response, next) => {
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) || false }));
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(express.json({ limit: '1mb' }));
+app.use(auditTrail.middleware());
 authController.install(app);
 
 installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission: authController.requirePermission.bind(authController) });
 
 app.get('/api/v1/health', async (_request, response) => {
-  const [storage, queue] = await Promise.all([store.health(), commandQueue.health()]);
+  const [storage, queue, audit] = await Promise.all([store.health(), commandQueue.health(), auditTrail.health()]);
   const scheduler = commandScheduler.health();
   const authentication = authController.health();
-  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy;
+  const secrets = secretManager.health();
+  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy && secrets.healthy && audit.healthy;
   response.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     version: '0.1.0',
     time: new Date().toISOString(),
-    infrastructure: { storage, queue, scheduler, authentication },
+    infrastructure: { storage, queue, scheduler, authentication, secrets, audit },
   });
 });
 
@@ -76,6 +82,76 @@ for (const [resource, permission] of Object.entries({
 
 app.get('/api/v1/sensors', authController.requirePermission('sensor:read'), async (_request, response) => response.json({ items: (await store.read('sensors')).map(publicSensor) }));
 
+app.get('/api/v1/secrets', authController.requirePermission('secret:read'), async (_request, response) => {
+  response.set('Cache-Control', 'no-store');
+  response.json({ items: (await store.read('secrets')).map(publicSecret) });
+});
+
+app.post('/api/v1/secrets', authController.requirePermission('secret:write'), async (request, response) => {
+  const { name, type = 'integration', description = '', value } = request.body || {};
+  if (!String(name || '').trim() || !String(value || '')) return response.status(400).json({ error: 'name and value are required' });
+  if (!['integration', 'cloud', 'identity', 'response', 'api'].includes(type)) return response.status(400).json({ error: 'Unsupported secret type' });
+  const id = `sec-${crypto.randomUUID().slice(0, 12)}`;
+  const sealed = await secretManager.seal(id, value, type);
+  const now = new Date().toISOString();
+  const record = await store.add('secrets', {
+    id,
+    name: String(name).trim().slice(0, 100),
+    type,
+    description: String(description).trim().slice(0, 300),
+    provider: sealed.envelope.provider,
+    keyId: sealed.envelope.keyId,
+    fingerprint: sealed.fingerprint,
+    envelope: sealed.envelope,
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    createdBy: request.user.id,
+  });
+  response.locals.auditTargetId = id;
+  response.locals.auditTargetType = 'secret';
+  response.set('Cache-Control', 'no-store');
+  response.status(201).json(publicSecret(record));
+});
+
+app.post('/api/v1/secrets/:id/rotate', authController.requirePermission('secret:write'), async (request, response) => {
+  const record = (await store.read('secrets')).find((candidate) => candidate.id === request.params.id);
+  if (!record) return response.status(404).json({ error: 'Secret not found' });
+  if (!String(request.body?.value || '')) return response.status(400).json({ error: 'value is required' });
+  const sealed = await secretManager.seal(record.id, request.body.value, record.type);
+  const updated = await store.update('secrets', record.id, {
+    provider: sealed.envelope.provider,
+    keyId: sealed.envelope.keyId,
+    fingerprint: sealed.fingerprint,
+    envelope: sealed.envelope,
+    updatedAt: new Date().toISOString(),
+    updatedBy: request.user.id,
+  });
+  response.locals.auditTargetId = record.id;
+  response.locals.auditTargetType = 'secret';
+  response.set('Cache-Control', 'no-store');
+  response.json(publicSecret(updated));
+});
+
+app.post('/api/v1/secrets/:id/verify', authController.requirePermission('secret:write'), async (request, response) => {
+  const record = (await store.read('secrets')).find((candidate) => candidate.id === request.params.id);
+  if (!record) return response.status(404).json({ error: 'Secret not found' });
+  const verified = await secretManager.verify(record.id, record.envelope, record.fingerprint);
+  response.locals.auditTargetId = record.id;
+  response.locals.auditTargetType = 'secret';
+  response.set('Cache-Control', 'no-store');
+  response.json({ verified, provider: record.provider, keyId: record.keyId, checkedAt: new Date().toISOString() });
+});
+
+app.get('/api/v1/audit-events', authController.requirePermission('audit:read'), async (request, response) => {
+  const [items, verification] = await Promise.all([
+    auditTrail.list(request.query.limit),
+    auditTrail.verify(),
+  ]);
+  response.set('Cache-Control', 'no-store');
+  response.json({ items, verification });
+});
+
 app.post('/api/v1/deployments', authController.requirePermission('deception:write'), async (request, response) => {
   const { name, blueprintId, environment, location, mode = 'agentless', customizations = {} } = request.body || {};
   if (!name || !blueprintId || !environment || !location) {
@@ -94,6 +170,8 @@ app.post('/api/v1/deployments', authController.requirePermission('deception:writ
     interactions: 0,
     updatedAt: new Date().toISOString(),
   });
+  response.locals.auditTargetId = deployment.id;
+  response.locals.auditTargetType = 'deployment';
   response.status(201).json(deployment);
 });
 
@@ -102,6 +180,8 @@ app.patch('/api/v1/incidents/:id', authController.requirePermission('incident:wr
   const changes = Object.fromEntries(Object.entries(request.body || {}).filter(([key]) => allowed.includes(key)));
   const incident = await store.update('incidents', request.params.id, changes);
   if (!incident) return response.status(404).json({ error: 'Incident not found' });
+  response.locals.auditTargetId = request.params.id;
+  response.locals.auditTargetType = 'incident';
   response.json(incident);
 });
 
@@ -119,6 +199,8 @@ app.post('/api/v1/tokens', authController.requirePermission('token:write'), asyn
     createdAt: new Date().toISOString(),
     beaconUrl: `${baseUrl}/api/v1/beacon/${id}`,
   });
+  response.locals.auditTargetId = id;
+  response.locals.auditTargetType = 'canary-token';
   response.status(201).json(token);
 });
 
@@ -166,7 +248,8 @@ export async function initializeInfrastructure() {
 
 export async function closeInfrastructure() {
   commandScheduler.close();
-  await Promise.allSettled([authController.close(), commandQueue.close(), store.close()]);
+  await auditTrail.flush();
+  await Promise.allSettled([authController.close(), secretManager.close(), commandQueue.close(), store.close()]);
 }
 
 export async function start() {
@@ -191,4 +274,4 @@ if (process.env.NODE_ENV !== 'test') {
   process.once('SIGINT', shutdown);
 }
 
-export { app, authController, commandQueue, commandScheduler };
+export { app, authController, secretManager, auditTrail, commandQueue, commandScheduler };

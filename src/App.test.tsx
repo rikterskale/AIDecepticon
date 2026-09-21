@@ -55,6 +55,16 @@ describe('AIDecepticon control plane', () => {
     expect(screen.getByText('Step 1 of 4')).toBeInTheDocument()
   })
 
+  it('opens the guided encrypted-secret workflow', async () => {
+    render(<App />)
+    await screen.findByText('Make every attack path')
+    fireEvent.click(screen.getByRole('button', { name: 'Platform & API' }))
+    fireEvent.click(screen.getAllByRole('button', { name: /^Add secret$/ })[0])
+    expect(screen.getByRole('dialog', { name: 'Add encrypted secret' })).toBeInTheDocument()
+    expect(screen.getByText('Encrypted at rest')).toBeInTheDocument()
+    expect(screen.getByText('No plaintext reads')).toBeInTheDocument()
+  })
+
   it('guides unauthenticated operators to enterprise sign-in', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       enabled: true,

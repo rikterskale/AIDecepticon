@@ -128,4 +128,5 @@ export const seedState = {
   sensorEnrollmentTokens: [],
   sensorCommands: [],
   sensorEvents: [],
+  secrets: [],
 };

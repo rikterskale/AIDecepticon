@@ -9,7 +9,7 @@ export const rolePermissions = Object.freeze({
   platform_admin: ['*'],
   deception_engineer: ['platform:read', 'deception:read', 'deception:write', 'sensor:read', 'sensor:write', 'token:write', 'incident:read'],
   analyst: ['platform:read', 'deception:read', 'sensor:read', 'incident:read', 'incident:write'],
-  auditor: ['platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read'],
+  auditor: ['platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read', 'secret:read'],
   service: [],
 });
 
@@ -318,6 +318,7 @@ export class AuthController {
   async establishSession(request, user, extra = {}) {
     await regenerateSession(request);
     request.session.user = user;
+    request.user = user;
     request.session.authenticatedAt = new Date().toISOString();
     Object.assign(request.session, extra);
     await saveSession(request);

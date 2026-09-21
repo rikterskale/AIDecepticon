@@ -21,6 +21,8 @@ export class JsonStore {
     this.mode = 'json';
     this.dataDir = path.resolve(dataDirectory);
     this.statePath = path.join(this.dataDir, 'state.json');
+    this.auditPath = path.join(this.dataDir, 'audit.ndjson');
+    this.auditAppendQueue = Promise.resolve();
     this.state = this.load();
   }
 
@@ -62,6 +64,28 @@ export class JsonStore {
     collection[index] = { ...collection[index], ...changes };
     this.persist();
     return clone(collection[index]);
+  }
+
+  async appendAudit(factory) {
+    const operation = async () => {
+      const previous = (await this.readAudit(1))[0] || null;
+      const event = await factory(previous);
+      fs.mkdirSync(this.dataDir, { recursive: true });
+      fs.appendFileSync(this.auditPath, `${JSON.stringify(event)}\n`, { encoding: 'utf8', mode: 0o600 });
+      return clone(event);
+    };
+    this.auditAppendQueue = this.auditAppendQueue.then(operation, operation);
+    return this.auditAppendQueue;
+  }
+
+  async readAudit(limit = 100) {
+    try {
+      const lines = fs.readFileSync(this.auditPath, 'utf8').split(/\r?\n/).filter(Boolean);
+      return lines.slice(-limit).reverse().map((line) => JSON.parse(line));
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw new Error(`Unable to load audit events from ${this.auditPath}: ${error.message}`);
+    }
   }
 
   async health() {
@@ -170,6 +194,36 @@ export class PostgresStore {
       [key, id, JSON.stringify(changes)],
     );
     return result.rows[0]?.payload || null;
+  }
+
+  async appendAudit(factory) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(84632018)');
+      const latest = await client.query('SELECT payload FROM administrative_audit_events ORDER BY sequence DESC LIMIT 1');
+      const event = await factory(latest.rows[0]?.payload || null);
+      await client.query(
+        `INSERT INTO administrative_audit_events (event_id, occurred_at, payload, previous_hash, event_hash)
+         VALUES ($1, $2, $3::jsonb, $4, $5)`,
+        [event.id.replace(/^aud-/, ''), event.occurredAt, JSON.stringify(event), event.previousHash, event.hash],
+      );
+      await client.query('COMMIT');
+      return event;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async readAudit(limit = 100) {
+    const result = await this.pool.query(
+      'SELECT payload FROM administrative_audit_events ORDER BY sequence DESC LIMIT $1',
+      [Math.min(Math.max(Number(limit) || 100, 1), 10_000)],
+    );
+    return result.rows.map((row) => row.payload);
   }
 
   async health() {

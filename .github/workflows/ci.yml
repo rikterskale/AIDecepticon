@@ -103,7 +103,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test -- server/sensor-api.test.js server/command-queue.test.js server/auth.test.js
+      - run: npm test -- server/sensor-api.test.js server/command-queue.test.js server/auth.test.js server/audit.test.js server/secret-manager.test.js
 
   containers:
     name: Container builds

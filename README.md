@@ -25,6 +25,8 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - Optional PostgreSQL persistence with ordered schema migrations and a Redis-compatible durable sensor-command queue.
 - Bounded sensor-command retries with exponential backoff, scheduled acknowledgement recovery, and a GUI-operated dead-letter queue.
 - Guided OIDC, SAML, or scoped API-key sign-in with server-side sessions, MFA-aware policy checks, and five enforceable RBAC roles.
+- GUI-managed encrypted provider credentials using local AES-256-GCM, HashiCorp Vault Transit, or AWS KMS without plaintext list/read endpoints.
+- Append-only HMAC-chained administrative audit events with sensitive-field redaction, PostgreSQL mutation guards, and continuous integrity verification.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -67,6 +69,8 @@ For a production-style local build on Windows PowerShell:
 npm run build
 $env:NODE_ENV='production'
 $env:SENSOR_COMMAND_SIGNING_KEY='<at-least-32-random-bytes>'
+$env:SECRET_LOCAL_KEYS='{"primary":"<base64-encoded-32-byte-key>"}'
+$env:AUDIT_SIGNING_KEYS='{"primary":"<at-least-32-random-bytes>"}'
 npm start
 ```
 
@@ -76,6 +80,8 @@ Then open `http://localhost:8787`.
 
 ```bash
 export SENSOR_COMMAND_SIGNING_KEY="$(openssl rand -hex 32)"
+export SECRET_LOCAL_KEYS="{\"primary\":\"$(openssl rand -base64 32)\"}"
+export AUDIT_SIGNING_KEYS="{\"primary\":\"$(openssl rand -base64 32)\"}"
 docker compose up --build
 ```
 
@@ -97,6 +103,14 @@ OIDC uses Authorization Code with PKCE, state, and nonce validation. SAML requir
 
 `AUTH_ROLE_MAPPINGS` maps trusted IdP groups to `platform_admin`, `deception_engineer`, `analyst`, `auditor`, or `service`. Every management API route enforces its corresponding permission. A `CONTROL_PLANE_API_KEY` can also be limited with `CONTROL_PLANE_API_PERMISSIONS`; when external identity is disabled, operators can exchange that key for an HTTP-only GUI session on the guided sign-in screen.
 
+### Encrypted secrets and audit integrity
+
+**Platform & API → Secret vault** guides administrators through storing, rotating, and verifying integration, cloud, identity, response, and API credentials. Listing endpoints return only names, provider/key identifiers, and ciphertext fingerprints; no password-derived verifier is exposed. Verification decrypts inside the control plane and returns only an integrity result.
+
+`SECRET_PROVIDER=local` uses AES-256-GCM with `SECRET_LOCAL_KEYS`; the first/selected `SECRET_LOCAL_KEY_ID` encrypts new values while retained IDs decrypt historical values. Set `SECRET_PROVIDER=vault-transit` with `VAULT_ADDR`, `VAULT_TOKEN`, and `VAULT_TRANSIT_KEY`, or `SECRET_PROVIDER=aws-kms` with `AWS_REGION` and `AWS_KMS_KEY_ID`. AWS credentials follow the SDK default credential chain, so workload identity is preferred.
+
+Every administrative or response mutation is automatically redacted and appended to an HMAC-SHA256 hash chain. PostgreSQL deployments store these records in a dedicated table whose triggers reject update, delete, and truncate operations. `AUDIT_SIGNING_KEYS` supports verification across key rotation; keep historical key IDs available until their retention window ends.
+
 ## Operator journey
 
 1. Open **Command center** to review coverage, live signals, incident confidence, and sensor health.
@@ -104,7 +118,7 @@ OIDC uses Authorization Code with PKCE, state, and nonce validation. SAML requir
 3. Use **Deception mesh → Canary tokens** to generate an instrumented file, credential, connection, cloud key, or API secret.
 4. Review touches in **Detections**, including the reconstructed sequence, confidence, MITRE ATT&CK mapping, and agentic-behavior assessment.
 5. Connect the response path in **Integrations**, then manage identity domains, endpoint policies, and sensors under **Protected surfaces**.
-6. Use **Platform & API** for health, governance, API examples, and the OpenAPI contract.
+6. Use **Platform & API** to protect provider credentials and verify the immutable administrative audit chain entirely through the GUI.
 
 ## API
 
@@ -125,6 +139,10 @@ Implemented resources include:
 - `GET|POST /api/v1/tokens`
 - `GET|PATCH /api/v1/incidents`
 - `GET /api/v1/sensors`
+- `GET|POST /api/v1/secrets`
+- `POST /api/v1/secrets/{secretId}/rotate`
+- `POST /api/v1/secrets/{secretId}/verify`
+- `GET /api/v1/audit-events`
 - `POST /api/v1/sensor-enrollment-tokens`
 - `POST /api/v1/sensors/enroll`
 - `POST /api/v1/sensors/{sensorId}/heartbeat`
@@ -148,7 +166,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, PostgreSQL migrations, and Redis-backed command delivery.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment and secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 
@@ -158,7 +176,7 @@ AIDecepticon is for authorized defensive security operations. Deception artifact
 
 The complete milestone plan—including projection sensors, production control-plane work, endpoint delivery, SOC integrations, multi-domain AD, cloud controllers, decoy runtime breadth, AI/GenAI deception, and enterprise operations—is maintained in [ROADMAP.md](ROADMAP.md).
 
-The active milestone is the projection-sensor MVP: secure enrollment, authenticated health and command channels, signed instructions, isolated decoy listeners, and interaction telemetry.
+The active milestone is production control-plane hardening: multi-tenancy boundaries, backup/restore automation, observability, and high-availability operations.
 
 ## License
 

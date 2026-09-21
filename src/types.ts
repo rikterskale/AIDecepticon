@@ -123,3 +123,37 @@ export interface AuthSession {
   user: AuthUser | null
   permissions: string[]
 }
+
+export interface SecretRecord {
+  id: string
+  name: string
+  type: 'integration' | 'cloud' | 'identity' | 'response' | 'api'
+  description: string
+  provider: 'local' | 'vault-transit' | 'aws-kms'
+  keyId: string
+  fingerprint: string
+  status: 'active'
+  createdAt: string
+  updatedAt: string
+  createdBy: string
+  updatedBy?: string
+}
+
+export interface AuditEvent {
+  schemaVersion: number
+  id: string
+  occurredAt: string
+  actor: { id: string; displayName?: string; role?: string; provider?: string; mfa?: boolean }
+  action: string
+  target: { type: string; id: string }
+  outcome: 'success' | 'denied' | 'error'
+  request: { id: string; method?: string; path?: string; status?: number; sourceIp?: string }
+  previousHash: string
+  signingKeyId: string
+  hash: string
+}
+
+export interface AuditResponse {
+  items: AuditEvent[]
+  verification: { valid: boolean; checked: number; headHash?: string; failedEventId?: string }
+}

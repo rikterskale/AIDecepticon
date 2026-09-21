@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AIDecepticon Control Plane API
   version: 0.1.0
-  description: API for managing deception deployments, sensors, tokens, incidents, identity domains, and integrations.
+  description: API for managing deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, identity domains, and integrations.
   license:
     name: MIT
     identifier: MIT
@@ -382,6 +382,67 @@ paths:
       responses:
         '201': { description: Event and high-confidence incident created }
         '401': { description: Sensor authentication required }
+  /secrets:
+    get:
+      operationId: listEncryptedSecrets
+      summary: List encrypted-secret metadata without ciphertext or plaintext
+      responses:
+        '200': { description: Secret metadata collection }
+    post:
+      operationId: createEncryptedSecret
+      summary: Encrypt and store a provider credential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, value]
+              properties:
+                name: { type: string, maxLength: 100 }
+                type: { type: string, enum: [integration, cloud, identity, response, api] }
+                description: { type: string, maxLength: 300 }
+                value: { type: string, format: password, maxLength: 4096 }
+      responses:
+        '201': { description: Secret encrypted; metadata returned without ciphertext }
+        '400': { description: Invalid secret input }
+  /secrets/{secretId}/rotate:
+    post:
+      operationId: rotateEncryptedSecret
+      summary: Replace a secret with a newly encrypted value
+      parameters:
+        - $ref: '#/components/parameters/SecretId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, format: password, maxLength: 4096 }
+      responses:
+        '200': { description: Secret value rotated; metadata returned }
+        '404': { description: Secret not found }
+  /secrets/{secretId}/verify:
+    post:
+      operationId: verifyEncryptedSecret
+      summary: Decrypt server-side and compare the secret integrity fingerprint
+      parameters:
+        - $ref: '#/components/parameters/SecretId'
+      responses:
+        '200': { description: Verification result without plaintext }
+        '404': { description: Secret not found }
+  /audit-events:
+    get:
+      operationId: listAdministrativeAuditEvents
+      summary: List append-only audit events and verify the HMAC chain
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        '200': { description: Audit events and chain verification result }
   /domains:
     get:
       operationId: listDomains
@@ -425,12 +486,14 @@ components:
         time: { type: string, format: date-time }
         infrastructure:
           type: object
-          required: [storage, queue, scheduler, authentication]
+          required: [storage, queue, scheduler, authentication, secrets, audit]
           properties:
             storage: { $ref: '#/components/schemas/InfrastructureHealth' }
             queue: { $ref: '#/components/schemas/InfrastructureHealth' }
             scheduler: { $ref: '#/components/schemas/InfrastructureHealth' }
             authentication: { $ref: '#/components/schemas/InfrastructureHealth' }
+            secrets: { $ref: '#/components/schemas/InfrastructureHealth' }
+            audit: { $ref: '#/components/schemas/InfrastructureHealth' }
   securitySchemes:
     controlPlaneSession:
       type: apiKey
@@ -456,3 +519,8 @@ components:
       in: path
       required: true
       schema: { type: string }
+    SecretId:
+      name: secretId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^sec-' }

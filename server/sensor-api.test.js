@@ -29,6 +29,7 @@ beforeAll(async () => {
   process.env.NODE_ENV = 'test';
   process.env.DATA_DIR = temporaryDataDir;
   process.env.SENSOR_COMMAND_SIGNING_KEY = 'test-signing-key-with-at-least-32-bytes';
+  process.env.AUDIT_SIGNING_KEY = 'audit-test-key-with-at-least-32-bytes';
   const [{ app, initializeInfrastructure, closeInfrastructure: close }, sensorApi] = await Promise.all([import('./index.js'), import('./sensor-api.js')]);
   verifySensorCommand = sensorApi.verifySensorCommand;
   assertSensorSecurityConfiguration = sensorApi.assertSensorSecurityConfiguration;
@@ -55,6 +56,30 @@ describe('projection sensor control channel', () => {
     expect(health.payload.infrastructure.queue.mode).toBe(process.env.REDIS_URL ? 'redis' : 'store');
     expect(health.payload.infrastructure.scheduler).toMatchObject({ healthy: true, mode: 'scheduled' });
     expect(health.payload.infrastructure.authentication).toMatchObject({ healthy: true, mode: 'disabled' });
+    expect(health.payload.infrastructure.secrets).toMatchObject({ healthy: true, mode: 'local' });
+    expect(health.payload.infrastructure.audit).toMatchObject({ healthy: true, mode: 'hmac-sha256-chain', valid: true });
+  });
+
+  it('stores encrypted secrets and exposes only verified metadata', async () => {
+    const value = `siem-secret-${crypto.randomUUID()}`;
+    const created = await request('/api/v1/secrets', {
+      method: 'POST',
+      body: { name: 'Splunk HEC', type: 'integration', description: 'SOC export credential', value },
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.payload).toMatchObject({ name: 'Splunk HEC', provider: 'local', status: 'active' });
+    expect(created.payload).not.toHaveProperty('envelope');
+    expect(JSON.stringify(created.payload)).not.toContain(value);
+
+    const verification = await request(`/api/v1/secrets/${created.payload.id}/verify`, { method: 'POST', body: {} });
+    expect(verification.payload).toMatchObject({ verified: true, provider: 'local' });
+    const listing = await request('/api/v1/secrets');
+    expect(listing.payload.items.find((item) => item.id === created.payload.id)).not.toHaveProperty('envelope');
+
+    const audit = await request('/api/v1/audit-events');
+    expect(audit.payload.verification.valid).toBe(true);
+    expect(audit.payload.items.some((event) => event.action === 'secret.create' && event.target.id === created.payload.id)).toBe(true);
+    expect(JSON.stringify(audit.payload)).not.toContain(value);
   });
 
   it('refuses an undersized production command-signing key', () => {

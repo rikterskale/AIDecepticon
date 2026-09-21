@@ -92,8 +92,38 @@ test.describe('guided operator journeys', () => {
     await page.getByRole('button', { name: 'Protected surfaces' }).click()
     const recovery = page.locator('.command-recovery-panel')
     await expect(recovery.getByRole('heading', { name: 'Command dead-letter queue' })).toBeVisible()
-    await expect(recovery.getByText('browser recovery test failure')).toBeVisible()
-    await recovery.getByRole('button', { name: 'Retry' }).click()
-    await expect(recovery.getByText('No commands need attention')).toBeVisible()
+    const recoveryRow = recovery.locator('article').filter({ hasText: sensorId })
+    await expect(recoveryRow).toBeVisible()
+    await recoveryRow.getByRole('button', { name: 'Retry' }).click()
+    await expect(recoveryRow).not.toBeVisible()
+  })
+
+  test('protects and rotates a provider credential with a verified audit chain', async ({ page }) => {
+    const secretName = `Splunk HEC ${Date.now()}`
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Platform & API' }).click()
+    await page.locator('.secret-vault-panel').getByRole('button', { name: 'Add secret', exact: true }).first().click()
+
+    const createModal = page.getByRole('dialog', { name: 'Add encrypted secret' })
+    await createModal.getByLabel('Display name').fill(secretName)
+    await createModal.getByLabel('Description').fill('Browser-tested SIEM export credential')
+    await createModal.getByLabel('Secret value').fill('initial-browser-secret-value')
+    await createModal.getByRole('button', { name: 'Encrypt & store secret' }).click()
+
+    const vault = page.locator('.secret-vault-panel')
+    const secretRow = vault.locator('article').filter({ hasText: secretName }).first()
+    await expect(secretRow).toBeVisible()
+    await expect(secretRow.getByText(/fp:[a-f0-9]{16}/)).toBeVisible()
+    await secretRow.getByRole('button', { name: `Rotate ${secretName}` }).click()
+
+    const rotateModal = page.getByRole('dialog', { name: `Rotate ${secretName}` })
+    await rotateModal.getByLabel('Replacement secret value').fill('rotated-browser-secret-value')
+    await rotateModal.getByRole('button', { name: 'Rotate encrypted value' }).click()
+    await secretRow.getByRole('button', { name: 'Verify' }).click()
+    await expect(page.getByText(`${secretName} decrypted and matched its integrity fingerprint`)).toBeVisible()
+
+    const audit = page.locator('.audit-panel')
+    await expect(audit.getByText('Chain verified')).toBeVisible()
+    await expect(audit.getByText('secret verify')).toBeVisible()
   })
 })
