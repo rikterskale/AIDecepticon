@@ -51,10 +51,11 @@ Status: **CI baseline implemented; release hardening in progress**
 
 ## Milestone 3 — Production control plane
 
-Status: **Planned**
+Status: **Persistence and queue foundation implemented**
 
-- [ ] PostgreSQL persistence with versioned schema migrations.
-- [ ] Redis-compatible work queue for sensor commands, retries, and scheduled tasks.
+- [x] PostgreSQL persistence with ordered, versioned schema migrations and safe single-runner migration locking.
+- [x] Redis-compatible sensor-command delivery queue with persistent source-of-truth recovery and local fallback.
+- [ ] Retry/backoff policies, dead-letter handling, and scheduled control-plane tasks.
 - [ ] OIDC and SAML authentication with MFA-aware session policy.
 - [ ] Fine-grained RBAC for platform, analyst, deception engineer, auditor, and service roles.
 - [ ] Encrypted secret storage with pluggable Vault/KMS providers.

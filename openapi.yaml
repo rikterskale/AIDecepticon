@@ -9,9 +9,18 @@ paths:
   /health:
     get:
       operationId: getHealth
-      summary: Read service health
+      summary: Read service and infrastructure health
       responses:
-        '200': { description: Healthy }
+        '200':
+          description: Control plane, storage, and queue are healthy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: A configured infrastructure dependency is degraded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
   /summary:
     get:
       operationId: getSummary
@@ -274,6 +283,27 @@ paths:
         '204': { description: Interaction recorded }
         '404': { description: Token not found }
 components:
+  schemas:
+    InfrastructureHealth:
+      type: object
+      required: [healthy, mode]
+      properties:
+        healthy: { type: boolean }
+        mode: { type: string }
+        error: { type: string }
+    Health:
+      type: object
+      required: [status, version, time, infrastructure]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+        time: { type: string, format: date-time }
+        infrastructure:
+          type: object
+          required: [storage, queue]
+          properties:
+            storage: { $ref: '#/components/schemas/InfrastructureHealth' }
+            queue: { $ref: '#/components/schemas/InfrastructureHealth' }
   securitySchemes:
     controlPlaneBearer:
       type: http

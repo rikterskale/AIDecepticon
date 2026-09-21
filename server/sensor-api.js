@@ -60,8 +60,8 @@ export function publicSensor(sensor) {
   return safeSensor;
 }
 
-export function createSensorCommand(store, sensorId, input = {}) {
-  const sensor = store.read('sensors').find((candidate) => candidate.id === sensorId);
+export async function createSensorCommand(store, commandQueue, sensorId, input = {}) {
+  const sensor = (await store.read('sensors')).find((candidate) => candidate.id === sensorId);
   if (!sensor) return { error: 'Sensor not found', status: 404 };
   if (!allowedCommandTypes.has(input.type)) return { error: 'Unsupported sensor command type', status: 400 };
 
@@ -76,12 +76,14 @@ export function createSensorCommand(store, sensorId, input = {}) {
     status: 'queued',
   };
   command.signature = signSensorCommand(command);
-  return { command: store.add('sensorCommands', command) };
+  const persisted = await store.add('sensorCommands', command);
+  await commandQueue.enqueue(persisted);
+  return { command: persisted };
 }
 
 function authorizeSensor(store) {
-  return (request, response, next) => {
-    const sensor = store.read('sensors').find((candidate) => candidate.id === request.params.sensorId);
+  return async (request, response, next) => {
+    const sensor = (await store.read('sensors')).find((candidate) => candidate.id === request.params.sensorId);
     const token = request.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
     if (!sensor?.accessTokenHash || !safeEqual(sensor.accessTokenHash, hashSecret(token))) {
       return response.status(401).json({ error: 'A valid sensor bearer token is required' });
@@ -102,16 +104,16 @@ function techniqueFor(protocol) {
   })[protocol] || 'T1046';
 }
 
-export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
+export function installSensorRoutes(app, { store, commandQueue, requireControlPlaneKey }) {
   assertSensorSecurityConfiguration();
 
   const requireSensor = authorizeSensor(store);
 
-  app.post('/api/v1/sensor-enrollment-tokens', requireControlPlaneKey, (request, response) => {
+  app.post('/api/v1/sensor-enrollment-tokens', requireControlPlaneKey, async (request, response) => {
     const ttlMinutes = Math.min(Math.max(Number(request.body?.ttlMinutes || 15), 5), 60);
     const token = crypto.randomBytes(32).toString('base64url');
     const createdAt = new Date();
-    const record = store.add('sensorEnrollmentTokens', {
+    const record = await store.add('sensorEnrollmentTokens', {
       id: `enr-${crypto.randomUUID().slice(0, 10)}`,
       label: String(request.body?.label || 'Projection sensor').slice(0, 100),
       tokenHash: hashSecret(token),
@@ -122,10 +124,10 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
     response.status(201).json({ id: record.id, token, expiresAt: record.expiresAt });
   });
 
-  app.post('/api/v1/sensors/enroll', (request, response) => {
+  app.post('/api/v1/sensors/enroll', async (request, response) => {
     const input = request.body || {};
     const tokenHash = hashSecret(String(input.enrollmentToken || ''));
-    const enrollment = store.read('sensorEnrollmentTokens').find((candidate) => safeEqual(candidate.tokenHash, tokenHash));
+    const enrollment = (await store.read('sensorEnrollmentTokens')).find((candidate) => safeEqual(candidate.tokenHash, tokenHash));
     if (!enrollment || enrollment.usedAt || Date.parse(enrollment.expiresAt) <= Date.now()) {
       return response.status(401).json({ error: 'Enrollment token is invalid, expired, or already used' });
     }
@@ -135,13 +137,13 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
       return response.status(400).json({ error: 'sensorId must be 3-64 letters, numbers, dots, dashes, or underscores' });
     }
     const sensorId = requestedId || `sen-${crypto.randomUUID().slice(0, 10)}`;
-    if (store.read('sensors').some((candidate) => candidate.id === sensorId)) {
+    if ((await store.read('sensors')).some((candidate) => candidate.id === sensorId)) {
       return response.status(409).json({ error: 'A sensor with this ID already exists' });
     }
 
     const accessToken = crypto.randomBytes(32).toString('base64url');
     const now = new Date().toISOString();
-    const sensor = store.add('sensors', {
+    const sensor = await store.add('sensors', {
       id: sensorId,
       name: String(input.name || enrollment.label || sensorId).slice(0, 100),
       type: 'projection',
@@ -158,7 +160,7 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
       decoyCount: 0,
       accessTokenHash: hashSecret(accessToken),
     });
-    store.update('sensorEnrollmentTokens', enrollment.id, { usedAt: now, sensorId });
+    await store.update('sensorEnrollmentTokens', enrollment.id, { usedAt: now, sensorId });
 
     response.status(201).json({
       sensor: publicSensor(sensor),
@@ -168,10 +170,10 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
     });
   });
 
-  app.post('/api/v1/sensors/:sensorId/heartbeat', requireSensor, (request, response) => {
+  app.post('/api/v1/sensors/:sensorId/heartbeat', requireSensor, async (request, response) => {
     const now = new Date().toISOString();
     const decoys = Array.isArray(request.body?.decoys) ? request.body.decoys.slice(0, 500) : [];
-    const sensor = store.update('sensors', request.params.sensorId, {
+    const sensor = await store.update('sensors', request.params.sensorId, {
       health: Math.min(Math.max(Number(request.body?.health ?? 100), 0), 100),
       latency: Math.max(Number(request.body?.latency ?? 0), 0),
       version: String(request.body?.version || request.sensor.version).slice(0, 30),
@@ -182,42 +184,43 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
       decoyCount: decoys.length,
       decoys,
     });
-    const pendingCommands = store.read('sensorCommands').filter((command) => command.sensorId === request.params.sensorId && command.status === 'queued' && Date.parse(command.expiresAt) > Date.now()).length;
+    const pendingCommands = await commandQueue.count(request.params.sensorId);
     response.json({ sensor: publicSensor(sensor), controllerTime: now, pendingCommands });
   });
 
-  app.get('/api/v1/sensors/:sensorId/commands', requireSensor, (request, response) => {
-    const commands = store.read('sensorCommands').filter((command) => command.sensorId === request.params.sensorId && command.status === 'queued' && Date.parse(command.expiresAt) > Date.now());
+  app.get('/api/v1/sensors/:sensorId/commands', requireSensor, async (request, response) => {
+    const commands = await commandQueue.pending(request.params.sensorId);
     response.json({ items: commands });
   });
 
-  app.post('/api/v1/sensors/:sensorId/commands', requireControlPlaneKey, (request, response) => {
-    const result = createSensorCommand(store, request.params.sensorId, request.body);
+  app.post('/api/v1/sensors/:sensorId/commands', requireControlPlaneKey, async (request, response) => {
+    const result = await createSensorCommand(store, commandQueue, request.params.sensorId, request.body);
     if (result.error) return response.status(result.status).json({ error: result.error });
     response.status(201).json(result.command);
   });
 
-  app.post('/api/v1/sensors/:sensorId/commands/:commandId/ack', requireSensor, (request, response) => {
-    const command = store.read('sensorCommands').find((candidate) => candidate.id === request.params.commandId && candidate.sensorId === request.params.sensorId);
+  app.post('/api/v1/sensors/:sensorId/commands/:commandId/ack', requireSensor, async (request, response) => {
+    const command = (await store.read('sensorCommands')).find((candidate) => candidate.id === request.params.commandId && candidate.sensorId === request.params.sensorId);
     if (!command) return response.status(404).json({ error: 'Command not found' });
     const status = request.body?.status === 'failed' ? 'failed' : 'acknowledged';
-    const updated = store.update('sensorCommands', command.id, {
+    const updated = await store.update('sensorCommands', command.id, {
       status,
       acknowledgedAt: new Date().toISOString(),
       output: request.body?.output || null,
       error: status === 'failed' ? String(request.body?.error || 'Sensor command failed').slice(0, 1000) : null,
     });
+    await commandQueue.acknowledge(request.params.sensorId, command.id);
     response.json(updated);
   });
 
-  app.post('/api/v1/sensors/:sensorId/events', requireSensor, (request, response) => {
+  app.post('/api/v1/sensors/:sensorId/events', requireSensor, async (request, response) => {
     const input = request.body || {};
     const protocol = allowedEventProtocols.has(input.protocol) ? input.protocol : 'tcp';
     if (!input.decoyId || !input.source) {
       return response.status(400).json({ error: 'decoyId and source are required' });
     }
     const timestamp = new Date().toISOString();
-    const event = store.add('sensorEvents', {
+    const event = await store.add('sensorEvents', {
       id: `evt-${crypto.randomUUID().slice(0, 12)}`,
       sensorId: request.params.sensorId,
       decoyId: String(input.decoyId).slice(0, 100),
@@ -228,7 +231,7 @@ export function installSensorRoutes(app, { store, requireControlPlaneKey }) {
       metadata: input.metadata && typeof input.metadata === 'object' ? input.metadata : {},
       timestamp,
     });
-    const incident = store.add('incidents', {
+    const incident = await store.add('incidents', {
       id: `INC-${crypto.randomInt(3000, 9999)}`,
       severity: 'high',
       title: `${protocol.toUpperCase()} interaction with projected decoy ${event.decoyName}`,

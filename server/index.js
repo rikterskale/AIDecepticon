@@ -5,11 +5,13 @@ import express from 'express';
 import cors from 'cors';
 import { store } from './store.js';
 import { installSensorRoutes, publicSensor } from './sensor-api.js';
+import { createCommandQueue } from './command-queue.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 const controlPlaneApiKey = process.env.CONTROL_PLANE_API_KEY;
+const commandQueue = createCommandQueue(store);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
 
@@ -33,16 +35,25 @@ function requireControlPlaneKey(request, response, next) {
   response.status(401).json({ error: 'A valid control-plane bearer token is required' });
 }
 
-installSensorRoutes(app, { store, requireControlPlaneKey });
+installSensorRoutes(app, { store, commandQueue, requireControlPlaneKey });
 
-app.get('/api/v1/health', (_request, response) => {
-  response.json({ status: 'ok', version: '0.1.0', time: new Date().toISOString() });
+app.get('/api/v1/health', async (_request, response) => {
+  const [storage, queue] = await Promise.all([store.health(), commandQueue.health()]);
+  const healthy = storage.healthy && queue.healthy;
+  response.status(healthy ? 200 : 503).json({
+    status: healthy ? 'ok' : 'degraded',
+    version: '0.1.0',
+    time: new Date().toISOString(),
+    infrastructure: { storage, queue },
+  });
 });
 
-app.get('/api/v1/summary', (_request, response) => {
-  const deployments = store.read('deployments');
-  const incidents = store.read('incidents');
-  const sensors = store.read('sensors');
+app.get('/api/v1/summary', async (_request, response) => {
+  const [deployments, incidents, sensors] = await Promise.all([
+    store.read('deployments'),
+    store.read('incidents'),
+    store.read('sensors'),
+  ]);
   response.json({
     protectedAssets: deployments.reduce((total, deployment) => total + deployment.decoys, 0),
     activeDetections: incidents.filter((incident) => !['closed', 'contained'].includes(incident.status)).length,
@@ -54,17 +65,17 @@ app.get('/api/v1/summary', (_request, response) => {
 });
 
 for (const resource of ['deployments', 'incidents', 'domains', 'integrations', 'tokens']) {
-  app.get(`/api/v1/${resource}`, (_request, response) => response.json({ items: store.read(resource) }));
+  app.get(`/api/v1/${resource}`, async (_request, response) => response.json({ items: await store.read(resource) }));
 }
 
-app.get('/api/v1/sensors', (_request, response) => response.json({ items: store.read('sensors').map(publicSensor) }));
+app.get('/api/v1/sensors', async (_request, response) => response.json({ items: (await store.read('sensors')).map(publicSensor) }));
 
-app.post('/api/v1/deployments', requireControlPlaneKey, (request, response) => {
+app.post('/api/v1/deployments', requireControlPlaneKey, async (request, response) => {
   const { name, blueprintId, environment, location, mode = 'agentless', customizations = {} } = request.body || {};
   if (!name || !blueprintId || !environment || !location) {
     return response.status(400).json({ error: 'name, blueprintId, environment, and location are required' });
   }
-  const deployment = store.add('deployments', {
+  const deployment = await store.add('deployments', {
     id: `dep-${crypto.randomUUID().slice(0, 8)}`,
     name,
     blueprintId,
@@ -80,19 +91,19 @@ app.post('/api/v1/deployments', requireControlPlaneKey, (request, response) => {
   response.status(201).json(deployment);
 });
 
-app.patch('/api/v1/incidents/:id', requireControlPlaneKey, (request, response) => {
+app.patch('/api/v1/incidents/:id', requireControlPlaneKey, async (request, response) => {
   const allowed = ['status', 'assignee'];
   const changes = Object.fromEntries(Object.entries(request.body || {}).filter(([key]) => allowed.includes(key)));
-  const incident = store.update('incidents', request.params.id, changes);
+  const incident = await store.update('incidents', request.params.id, changes);
   if (!incident) return response.status(404).json({ error: 'Incident not found' });
   response.json(incident);
 });
 
-app.post('/api/v1/tokens', requireControlPlaneKey, (request, response) => {
+app.post('/api/v1/tokens', requireControlPlaneKey, async (request, response) => {
   const { name, type = 'document', destination = 'default', metadata = {} } = request.body || {};
   if (!name) return response.status(400).json({ error: 'name is required' });
   const id = `tok-${crypto.randomUUID().slice(0, 12)}`;
-  const token = store.add('tokens', {
+  const token = await store.add('tokens', {
     id,
     name,
     type,
@@ -105,12 +116,12 @@ app.post('/api/v1/tokens', requireControlPlaneKey, (request, response) => {
   response.status(201).json(token);
 });
 
-app.all('/api/v1/beacon/:tokenId', (request, response) => {
-  const token = store.read('tokens').find((candidate) => candidate.id === request.params.tokenId);
+app.all('/api/v1/beacon/:tokenId', async (request, response) => {
+  const token = (await store.read('tokens')).find((candidate) => candidate.id === request.params.tokenId);
   if (!token) return response.status(404).json({ error: 'Token not found' });
 
-  store.update('tokens', token.id, { status: 'triggered', lastTriggeredAt: new Date().toISOString() });
-  store.add('incidents', {
+  await store.update('tokens', token.id, { status: 'triggered', lastTriggeredAt: new Date().toISOString() });
+  await store.add('incidents', {
     id: `INC-${crypto.randomInt(3000, 9999)}`,
     severity: 'high',
     title: `${token.type} canary triggered: ${token.name}`,
@@ -139,10 +150,37 @@ app.use((error, _request, response, _next) => {
   response.status(500).json({ error: 'Unexpected server error' });
 });
 
-if (process.env.NODE_ENV !== 'test') {
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`AIDecepticon listening on http://localhost:${port}`);
-  });
+let server;
+
+export async function initializeInfrastructure() {
+  await store.init();
+  await commandQueue.init();
 }
 
-export { app };
+export async function closeInfrastructure() {
+  await Promise.allSettled([commandQueue.close(), store.close()]);
+}
+
+export async function start() {
+  await initializeInfrastructure();
+  server = app.listen(port, '0.0.0.0', () => {
+    console.log(`AIDecepticon listening on http://localhost:${port}`);
+  });
+  return server;
+}
+
+async function shutdown() {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  await closeInfrastructure();
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  start().catch((error) => {
+    console.error(`AIDecepticon failed to start: ${error.message}`);
+    process.exitCode = 1;
+  });
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+}
+
+export { app, commandQueue };

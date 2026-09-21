@@ -22,6 +22,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
   - AI infrastructure decoys
 - Canary generation for fake files, credentials, cloud keys, API keys, and connections.
 - A persistent REST control-plane API and downloadable OpenAPI 3.1 contract.
+- Optional PostgreSQL persistence with ordered schema migrations and a Redis-compatible durable sensor-command queue.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -76,7 +77,13 @@ export SENSOR_COMMAND_SIGNING_KEY="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-The console and API are served at `http://localhost:8787`; state persists in the `aidecepticon-data` volume.
+The console and API are served at `http://localhost:8787`. Compose starts PostgreSQL 17 and Redis 8 with private persistent volumes; only the control-plane port is published. Set `POSTGRES_PASSWORD` to override the local-only database default.
+
+### Persistence and queue modes
+
+With no infrastructure variables set, AIDecepticon uses its owner-readable JSON state file and persisted command records. This keeps local installation and development simple.
+
+For fleet deployments, set `DATABASE_URL` and `REDIS_URL`. PostgreSQL becomes the source of truth for all resources and automatically applies the ordered migrations in `server/migrations`. Redis provides low-latency command delivery; queued commands remain recoverable from PostgreSQL if Redis is restarted or temporarily unavailable. Use `DATABASE_SSL=require` for a remote database and a `rediss://` URL for Redis over TLS.
 
 ## Operator journey
 
@@ -129,7 +136,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, and cross-language signing compatibility.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment flow, enrollment lifecycle, command signing, sensor telemetry, cross-language signing compatibility, PostgreSQL migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,6 +9,7 @@ let server;
 let baseUrl;
 let verifySensorCommand;
 let assertSensorSecurityConfiguration;
+let closeInfrastructure;
 const temporaryDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aidecepticon-sensor-api-'));
 
 async function request(route, { method = 'GET', token, body } = {}) {
@@ -27,9 +29,11 @@ beforeAll(async () => {
   process.env.NODE_ENV = 'test';
   process.env.DATA_DIR = temporaryDataDir;
   process.env.SENSOR_COMMAND_SIGNING_KEY = 'test-signing-key-with-at-least-32-bytes';
-  const [{ app }, sensorApi] = await Promise.all([import('./index.js'), import('./sensor-api.js')]);
+  const [{ app, initializeInfrastructure, closeInfrastructure: close }, sensorApi] = await Promise.all([import('./index.js'), import('./sensor-api.js')]);
   verifySensorCommand = sensorApi.verifySensorCommand;
   assertSensorSecurityConfiguration = sensorApi.assertSensorSecurityConfiguration;
+  closeInfrastructure = close;
+  await initializeInfrastructure();
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   const address = server.address();
@@ -38,10 +42,19 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await closeInfrastructure();
   fs.rmSync(temporaryDataDir, { recursive: true, force: true });
 });
 
 describe('projection sensor control channel', () => {
+  it('reports the active persistence and queue health', async () => {
+    const health = await request('/api/v1/health');
+    expect(health.response.status).toBe(200);
+    expect(health.payload.status).toBe('ok');
+    expect(health.payload.infrastructure.storage.mode).toBe(process.env.DATABASE_URL ? 'postgresql' : 'json');
+    expect(health.payload.infrastructure.queue.mode).toBe(process.env.REDIS_URL ? 'redis' : 'store');
+  });
+
   it('refuses an undersized production command-signing key', () => {
     const previousNodeEnv = process.env.NODE_ENV;
     const previousSigningKey = process.env.SENSOR_COMMAND_SIGNING_KEY;
@@ -56,6 +69,7 @@ describe('projection sensor control channel', () => {
   });
 
   it('enrolls, reports health, executes a signed command, and creates an incident', async () => {
+    const sensorId = `sen-integration-${crypto.randomUUID().slice(0, 8)}`;
     const enrollmentResponse = await request('/api/v1/sensor-enrollment-tokens', {
       method: 'POST',
       body: { label: 'Integration test sensor', ttlMinutes: 10 },
@@ -66,7 +80,7 @@ describe('projection sensor control channel', () => {
       method: 'POST',
       body: {
         enrollmentToken: enrollmentResponse.payload.token,
-        sensorId: 'sen-integration-test',
+        sensorId,
         name: 'Integration test sensor',
         version: '0.1.0-test',
         platform: 'test',
@@ -78,7 +92,7 @@ describe('projection sensor control channel', () => {
     expect(enrollment.payload.sensor).not.toHaveProperty('accessTokenHash');
 
     const accessToken = enrollment.payload.accessToken;
-    const heartbeat = await request('/api/v1/sensors/sen-integration-test/heartbeat', {
+    const heartbeat = await request(`/api/v1/sensors/${sensorId}/heartbeat`, {
       method: 'POST',
       token: accessToken,
       body: { health: 98, latency: 12, version: '0.1.0-test', decoys: [] },
@@ -86,7 +100,7 @@ describe('projection sensor control channel', () => {
     expect(heartbeat.response.status).toBe(200);
     expect(heartbeat.payload.sensor.health).toBe(98);
 
-    const queued = await request('/api/v1/sensors/sen-integration-test/commands', {
+    const queued = await request(`/api/v1/sensors/${sensorId}/commands`, {
       method: 'POST',
       body: {
         type: 'deploy_decoy',
@@ -96,17 +110,17 @@ describe('projection sensor control channel', () => {
     expect(queued.response.status).toBe(201);
     expect(verifySensorCommand(queued.payload)).toBe(true);
 
-    const commands = await request('/api/v1/sensors/sen-integration-test/commands', { token: accessToken });
+    const commands = await request(`/api/v1/sensors/${sensorId}/commands`, { token: accessToken });
     expect(commands.payload.items).toHaveLength(1);
 
-    const acknowledgement = await request(`/api/v1/sensors/sen-integration-test/commands/${queued.payload.id}/ack`, {
+    const acknowledgement = await request(`/api/v1/sensors/${sensorId}/commands/${queued.payload.id}/ack`, {
       method: 'POST',
       token: accessToken,
       body: { status: 'acknowledged', output: { address: '127.0.0.1:49152' } },
     });
     expect(acknowledgement.payload.status).toBe('acknowledged');
 
-    const event = await request('/api/v1/sensors/sen-integration-test/events', {
+    const event = await request(`/api/v1/sensors/${sensorId}/events`, {
       method: 'POST',
       token: accessToken,
       body: {
