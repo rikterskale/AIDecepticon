@@ -53,7 +53,7 @@ import {
   Zap,
   type LucideProps,
 } from 'lucide-react'
-import { apiGet, apiPatch, apiPost } from './api'
+import { apiGet, apiPatch, apiPost, setApiOrganization } from './api'
 import {
   blueprints,
   fallbackDeployments,
@@ -63,7 +63,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { AuditResponse, AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
+import type { AuditResponse, AuthSession, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, Organization, OrganizationResponse, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -454,11 +454,18 @@ function IntegrationsPage({ integrations, onToast }: { integrations: Integration
   )
 }
 
-function SystemPage({ sensors, auth, secrets, audit, onAddSecret, onRotateSecret, onVerifySecret, onToast }: { sensors: Sensor[]; auth: AuthSession; secrets: SecretRecord[]; audit: AuditResponse; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onToast: (message: string) => void }) {
-  const curl = `curl -X POST http://localhost:8787/api/v1/tokens \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"name":"Quarterly plan","type":"document"}'`
+function SystemPage({ sensors, auth, organizations, activeOrganizationId, secrets, audit, onAddOrganization, onAddSecret, onRotateSecret, onVerifySecret, onToast }: { sensors: Sensor[]; auth: AuthSession; organizations: Organization[]; activeOrganizationId: string; secrets: SecretRecord[]; audit: AuditResponse; onAddOrganization: () => void; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onToast: (message: string) => void }) {
+  const curl = [
+    `curl -X POST http://localhost:8787/api/v1/tokens \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -H "X-AIDecepticon-Organization: ${activeOrganizationId}" \\`,
+    `  -d '{"name":"Quarterly plan","type":"document"}'`,
+  ].join('\n')
   const canWriteSecrets = auth.permissions.includes('*') || auth.permissions.includes('secret:write')
   const canReadSecrets = canWriteSecrets || auth.permissions.includes('secret:read')
   const canReadAudit = auth.permissions.includes('*') || auth.permissions.includes('audit:read')
+  const canManageOrganizations = (auth.permissions.includes('*') || auth.permissions.includes('organization:write'))
+    && (auth.user?.role === 'platform_admin' || auth.user?.organizationIds?.includes('*'))
   return (
     <div className="system-layout">
       <section className="panel platform-health">
@@ -484,6 +491,11 @@ function SystemPage({ sensors, auth, secrets, audit, onAddSecret, onRotateSecret
           <div><span><Clipboard size={17} /></span><div><strong>Audit trail</strong><small>{canReadAudit ? (audit.verification.valid ? `${audit.verification.checked} events · chain verified` : 'Integrity verification needs attention') : 'Restricted to administrators and auditors'}</small></div><StatusPill status={canReadAudit && audit.verification.valid ? 'healthy' : 'learning'} /></div>
           <div><span><KeyRound size={17} /></span><div><strong>Encrypted secrets</strong><small>{canReadSecrets ? `${secrets.length} protected credentials · plaintext never listed` : 'Metadata access is restricted by role'}</small></div><ChevronRight size={16} /></div>
         </div>
+      </section>
+      <section className="panel organization-panel">
+        <header className="panel__header"><div><span className="eyebrow">MSSP isolation</span><h3>Organizations</h3></div>{canManageOrganizations && <button className="button button--small" onClick={onAddOrganization}><Plus size={14} /> Add organization</button>}</header>
+        <p>Every deployment, sensor, token, incident, secret, command, and audit event is isolated to one organization. Identity claims and scoped API credentials control membership.</p>
+        <div className="organization-list">{organizations.map((organization) => <article key={organization.id} className={organization.id === activeOrganizationId ? 'active' : ''}><span><Globe2 size={16} /></span><div><strong>{organization.name}</strong><small>{organization.slug} · {organization.plan}</small></div><StatusPill status={organization.id === activeOrganizationId ? 'healthy' : organization.status} /></article>)}</div>
       </section>
       <section className="panel secret-vault-panel">
         <header className="panel__header"><div><span className="eyebrow">Envelope encryption</span><h3>Secret vault</h3></div>{canWriteSecrets && <button className="button button--small" onClick={onAddSecret}><Plus size={14} /> Add secret</button>}</header>
@@ -526,6 +538,22 @@ function SecretModal({ existing, onClose, onComplete }: { existing?: SecretRecor
     } finally { setLoading(false) }
   }
   return <div className="modal-backdrop"><section className="simple-modal secret-modal" role="dialog" aria-modal="true" aria-label={existing ? `Rotate ${existing.name}` : 'Add encrypted secret'}><header><div className="modal-title-icon"><LockKeyhole size={20} /></div><div><span className="eyebrow">Guided secret vault</span><h2>{existing ? `Rotate ${existing.name}` : 'Protect a provider credential'}</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header><div className="token-form"><p>The plaintext is encrypted immediately and is never returned by listing APIs or written to the audit trail.</p>{!existing && <><label><span>Display name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Splunk HEC production" /></label><div className="form-row"><label><span>Credential type</span><select value={type} onChange={(event) => setType(event.target.value as SecretRecord['type'])}><option value="integration">SOC integration</option><option value="cloud">Cloud provider</option><option value="identity">Identity provider</option><option value="response">Response provider</option><option value="api">API credential</option></select></label><label><span>Description</span><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose and approved scope" /></label></div></>}<label><span>{existing ? 'Replacement secret value' : 'Secret value'}</span><input type="password" autoFocus={Boolean(existing)} autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} /></label><div className="sensor-security-list"><span><LockKeyhole size={16} /><b>Encrypted at rest</b>Provider-backed authenticated encryption.</span><span><Eye size={16} /><b>No plaintext reads</b>Verification occurs entirely server-side.</span><span><Fingerprint size={16} /><b>Audited lifecycle</b>Creation, rotation, and checks are chained.</span></div>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary full" disabled={!value || (!existing && !name.trim()) || loading} onClick={submit}>{loading ? <RefreshCw className="spin" size={16} /> : <ShieldCheck size={16} />} {existing ? 'Rotate encrypted value' : 'Encrypt & store secret'}</button></div></section></div>
+}
+
+function OrganizationModal({ onClose, onComplete }: { onClose: () => void; onComplete: (organization: Organization) => void }) {
+  const [name, setName] = useState('')
+  const [plan, setPlan] = useState('managed')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async () => {
+    setLoading(true); setError('')
+    try {
+      onComplete(await apiPost<Organization>('organizations', { name, plan }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to create the organization')
+    } finally { setLoading(false) }
+  }
+  return <div className="modal-backdrop"><section className="simple-modal" role="dialog" aria-modal="true" aria-label="Add organization"><header><div className="modal-title-icon"><Globe2 size={20} /></div><div><span className="eyebrow">Guided MSSP workspace</span><h2>Create an isolated organization</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header><div className="token-form"><p>New organizations start empty. Operators only see them when their trusted identity claim or scoped API credential grants access.</p><label><span>Organization name</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Northwind Production" /></label><label><span>Operating model</span><select value={plan} onChange={(event) => setPlan(event.target.value)}><option value="managed">Managed customer</option><option value="enterprise">Enterprise tenant</option><option value="evaluation">Evaluation</option></select></label><div className="sensor-security-list"><span><ShieldCheck size={16} /><b>Hard boundary</b>Storage reads and mutations require the active organization.</span><span><UsersRound size={16} /><b>Identity scoped</b>OIDC, SAML, and API-key memberships are enforced server-side.</span><span><Fingerprint size={16} /><b>Tenant evidence</b>Administrative activity is tagged and filtered by organization.</span></div>{error && <div className="form-error"><AlertTriangle size={15} />{error}</div>}<button className="button button--primary full" disabled={!name.trim() || loading} onClick={submit}>{loading ? <RefreshCw className="spin" size={16} /> : <Plus size={16} />} Create organization</button></div></section></div>
 }
 
 interface DeployForm {
@@ -665,6 +693,9 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const [sensorModal, setSensorModal] = useState(false)
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null)
   const [toast, setToast] = useState('')
+  const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [activeOrganizationId, setActiveOrganizationId] = useState('')
+  const [organizationModal, setOrganizationModal] = useState(false)
   const [summary, setSummary] = useState(fallbackSummary)
   const [deployments, setDeployments] = useState(fallbackDeployments)
   const [incidents, setIncidents] = useState(fallbackIncidents)
@@ -677,20 +708,35 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const [secretModal, setSecretModal] = useState<{ open: boolean; existing?: SecretRecord }>({ open: false })
 
   useEffect(() => {
+    setApiOrganization('')
+    apiGet<OrganizationResponse>('organizations', { items: [], activeOrganizationId: 'org-default' }).then((result) => {
+      let remembered = ''
+      try { remembered = window.localStorage.getItem('aidecepticon.organization') || '' } catch { remembered = '' }
+      const selected = result.items.some((organization) => organization.id === remembered) ? remembered : result.activeOrganizationId
+      setOrganizations(result.items)
+      setActiveOrganizationId(selected)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!activeOrganizationId) return
+    setApiOrganization(activeOrganizationId)
+    setSummary({ protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' })
+    setDeployments([]); setIncidents([]); setSensors([]); setDeadLetters([]); setDomains([]); setIntegrations([]); setSecrets([]); setAudit({ items: [], verification: { valid: true, checked: 0 } })
     Promise.all([
-      apiGet<Summary>('summary', fallbackSummary),
-      apiGet<{ items: Deployment[] }>('deployments', { items: fallbackDeployments }),
-      apiGet<{ items: Incident[] }>('incidents', { items: fallbackIncidents }),
-      apiGet<{ items: Sensor[] }>('sensors', { items: fallbackSensors }),
+      apiGet<Summary>('summary', { protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' }),
+      apiGet<{ items: Deployment[] }>('deployments', { items: [] }),
+      apiGet<{ items: Incident[] }>('incidents', { items: [] }),
+      apiGet<{ items: Sensor[] }>('sensors', { items: [] }),
       apiGet<{ items: SensorCommand[] }>('sensor-commands?status=dead_lettered', { items: [] }),
-      apiGet<{ items: Domain[] }>('domains', { items: fallbackDomains }),
-      apiGet<{ items: Integration[] }>('integrations', { items: fallbackIntegrations }),
+      apiGet<{ items: Domain[] }>('domains', { items: [] }),
+      apiGet<{ items: Integration[] }>('integrations', { items: [] }),
       apiGet<{ items: SecretRecord[] }>('secrets', { items: [] }),
       apiGet<AuditResponse>('audit-events?limit=50', { items: [], verification: { valid: true, checked: 0 } }),
     ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit]) => {
       setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items); setSecrets(nextSecrets.items); setAudit(nextAudit)
     })
-  }, [])
+  }, [activeOrganizationId])
 
   useEffect(() => {
     if (!toast) return
@@ -702,6 +748,11 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const activeDeployments = useMemo(() => deployments.filter((deployment) => deployment.status !== 'provisioning').length, [deployments])
   const navigate = (destination: PageId) => { setPage(destination); setSidebarOpen(false) }
   const initials = (auth.user?.displayName || 'AID').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()
+  const switchOrganization = (organizationId: string) => {
+    setApiOrganization(organizationId)
+    setActiveOrganizationId(organizationId)
+    try { window.localStorage.setItem('aidecepticon.organization', organizationId) } catch { /* storage may be unavailable */ }
+  }
   const retryCommand = async (command: SensorCommand) => {
     try {
       await apiPost<SensorCommand>(`sensor-commands/${command.id}/retry`, {})
@@ -754,6 +805,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
         <header className="topbar">
           <div className="topbar__title"><button className="menu-button" onClick={() => setSidebarOpen(!sidebarOpen)}><Menu size={19} /></button><div><h1>{pageMeta.title}</h1><p>{pageMeta.subtitle}</p></div></div>
           <div className="topbar__actions">
+            {organizations.length > 0 && <label className="organization-switcher"><Globe2 size={15} /><span><small>Organization</small><select aria-label="Active organization" value={activeOrganizationId} onChange={(event) => switchOrganization(event.target.value)}>{organizations.map((organization) => <option value={organization.id} key={organization.id}>{organization.name}</option>)}</select></span></label>}
             <button className="search-button" onClick={() => setSearchOpen(!searchOpen)}><Search size={16} /><span>Search anything</span><kbd>⌘ K</kbd></button>
             <button className={cx('guided-button', guided && 'active')} onClick={() => setGuided(!guided)}><Sparkles size={15} /> Guided mode <span>{guided ? 'On' : 'Off'}</span></button>
             <button className="icon-button notification-button"><Activity size={17} /><i /></button>
@@ -770,7 +822,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
           {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
-          {page === 'system' && <SystemPage sensors={sensors} auth={auth} secrets={secrets} audit={audit} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onToast={setToast} />}
+          {page === 'system' && <SystemPage sensors={sensors} auth={auth} organizations={organizations} activeOrganizationId={activeOrganizationId} secrets={secrets} audit={audit} onAddOrganization={() => setOrganizationModal(true)} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onToast={setToast} />}
         </main>
       </div>
 
@@ -778,6 +830,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       {tokenModal && <TokenModal onClose={() => setTokenModal(false)} onComplete={setToast} />}
       {sensorModal && <SensorEnrollmentModal onClose={() => setSensorModal(false)} onToast={setToast} />}
       {secretModal.open && <SecretModal existing={secretModal.existing} onClose={() => setSecretModal({ open: false })} onComplete={completeSecret} />}
+      {organizationModal && <OrganizationModal onClose={() => setOrganizationModal(false)} onComplete={(organization) => { setOrganizations((current) => [...current, organization]); setOrganizationModal(false); switchOrganization(organization.id); setToast(`${organization.name} is ready with an isolated workspace`) }} />}
       {selectedIncident && <IncidentDrawer incident={selectedIncident} onClose={() => setSelectedIncident(null)} onUpdate={(updated) => { setIncidents((current) => current.map((item) => item.id === updated.id ? updated : item)); setSelectedIncident(updated); setToast(`Incident ${updated.id} updated`) }} />}
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>

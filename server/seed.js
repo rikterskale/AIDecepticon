@@ -1,4 +1,4 @@
-export const seedState = {
+const resourceSeedState = {
   deployments: [
     {
       id: 'dep-fin-01',
@@ -129,4 +129,31 @@ export const seedState = {
   sensorCommands: [],
   sensorEvents: [],
   secrets: [],
+};
+
+export const defaultOrganizationId = 'org-default';
+
+export const seedState = {
+  organizations: [
+    {
+      id: defaultOrganizationId,
+      name: 'AIDecepticon Demo',
+      slug: 'aidecepticon-demo',
+      status: 'active',
+      plan: 'enterprise',
+      createdAt: '2026-09-21T12:00:00.000Z',
+    },
+    {
+      id: 'org-managed-lab',
+      name: 'Managed Customer Lab',
+      slug: 'managed-customer-lab',
+      status: 'active',
+      plan: 'managed',
+      createdAt: '2026-09-21T12:00:00.000Z',
+    },
+  ],
+  ...Object.fromEntries(Object.entries(resourceSeedState).map(([resource, items]) => [
+    resource,
+    items.map((item) => ({ ...item, organizationId: defaultOrganizationId })),
+  ])),
 };

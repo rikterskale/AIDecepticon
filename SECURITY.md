@@ -13,6 +13,7 @@ Please do not disclose security issues through a public issue. Use GitHub's priv
 - Keep the data directory on encrypted storage with access restricted to the service identity.
 - Require TLS and scoped service credentials for remote PostgreSQL and Redis instances; keep both services on private networks and never publish their ports directly.
 - Enable OIDC or SAML for shared deployments, require MFA evidence, and map only trusted identity-provider groups to AIDecepticon roles.
+- Map only trusted identity-provider claims to organization IDs, scope API credentials with `CONTROL_PLANE_API_ORGANIZATIONS`, and test cross-organization denial before onboarding managed customers.
 - Store `SESSION_SECRET`, OIDC client secrets, SAML certificates, encryption keyrings, audit signing keys, and scoped API credentials in the deployment secret manager rather than source control or container images.
 - Prefer Vault Transit or AWS KMS for provider credentials. Local AES-256-GCM mode requires an externally managed `SECRET_LOCAL_KEYS` keyring; never store that keyring beside the encrypted data or in a container image.
 - Retain retired local and audit key IDs until every dependent secret or audit event has aged out. Removing a historical key prevents decryption or integrity verification.

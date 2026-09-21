@@ -22,6 +22,15 @@ describe('encrypted secret providers', () => {
     expect(publicSecret({ id: 'sec-local', envelope: sealed.envelope, fingerprint: sealed.fingerprint })).not.toHaveProperty('envelope');
   });
 
+  it('cryptographically binds new secrets to their organization', async () => {
+    const manager = new SecretManager(localEnvironment);
+    const sealed = await manager.seal('sec-tenant', 'tenant-secret', 'integration', 'org-default');
+
+    expect(sealed.envelope.context.organizationId).toBe('org-default');
+    expect(await manager.unseal('sec-tenant', sealed.envelope, 'org-default')).toBe('tenant-secret');
+    await expect(manager.unseal('sec-tenant', sealed.envelope, 'org-managed-lab')).rejects.toThrow(/active organization/);
+  });
+
   it('supports AWS KMS with a cryptographically bound encryption context', async () => {
     const send = vi.fn(async (command) => {
       if (command instanceof EncryptCommand) return { CiphertextBlob: Buffer.from('kms-ciphertext'), KeyId: 'arn:aws:kms:us-east-1:123:key/test' };

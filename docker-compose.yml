@@ -33,6 +33,8 @@ services:
       AUTH_DEFAULT_ROLE: ${AUTH_DEFAULT_ROLE:-auditor}
       AUTH_GROUPS_CLAIM: ${AUTH_GROUPS_CLAIM:-groups}
       AUTH_ROLE_CLAIM: ${AUTH_ROLE_CLAIM:-aidecepticon_role}
+      AUTH_ORGANIZATIONS_CLAIM: ${AUTH_ORGANIZATIONS_CLAIM:-aidecepticon_organizations}
+      AUTH_DEFAULT_ORGANIZATION_ID: ${AUTH_DEFAULT_ORGANIZATION_ID:-org-default}
       AUTH_ROLE_MAPPINGS: ${AUTH_ROLE_MAPPINGS:-{}}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
@@ -48,6 +50,7 @@ services:
       SAML_MFA_VALUES: ${SAML_MFA_VALUES:-true,mfa}
       CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
       CONTROL_PLANE_API_PERMISSIONS: ${CONTROL_PLANE_API_PERMISSIONS:-*}
+      CONTROL_PLANE_API_ORGANIZATIONS: ${CONTROL_PLANE_API_ORGANIZATIONS:-org-default}
       DATABASE_URL: postgresql://aidecepticon:${POSTGRES_PASSWORD:-aidecepticon-local-change-me}@postgres:5432/aidecepticon
       REDIS_URL: redis://redis:6379
     depends_on:

@@ -4,12 +4,13 @@ import { RedisStore } from 'connect-redis';
 import { createClient } from 'redis';
 import * as oidc from 'openid-client';
 import { SAML, ValidateInResponseTo } from '@node-saml/node-saml';
+import { normalizeOrganizationIds } from './tenancy.js';
 
 export const rolePermissions = Object.freeze({
   platform_admin: ['*'],
-  deception_engineer: ['platform:read', 'deception:read', 'deception:write', 'sensor:read', 'sensor:write', 'token:write', 'incident:read'],
-  analyst: ['platform:read', 'deception:read', 'sensor:read', 'incident:read', 'incident:write'],
-  auditor: ['platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read', 'secret:read'],
+  deception_engineer: ['organization:read', 'platform:read', 'deception:read', 'deception:write', 'sensor:read', 'sensor:write', 'token:write', 'incident:read'],
+  analyst: ['organization:read', 'platform:read', 'deception:read', 'sensor:read', 'incident:read', 'incident:write'],
+  auditor: ['organization:read', 'platform:read', 'deception:read', 'sensor:read', 'incident:read', 'audit:read', 'secret:read'],
   service: [],
 });
 
@@ -90,12 +91,17 @@ export function buildPrincipal(claims, options = {}) {
   const id = String(claims.sub || claims.nameID || claims.email || claims.mail || 'unknown');
   const email = String(claims.email || claims.mail || claims['urn:oid:0.9.2342.19200300.100.1.3'] || '');
   const displayName = String(claims.name || claims.displayName || claims.cn || email || id);
+  const organizationIds = normalizeOrganizationIds(
+    claims[options.organizationsClaim || 'aidecepticon_organizations'],
+    normalizeList(options.defaultOrganizationIds),
+  );
   return {
     id,
     email,
     displayName,
     role,
     groups,
+    organizationIds,
     provider: options.provider || 'development',
     mfa: Boolean(options.mfa),
   };
@@ -161,10 +167,13 @@ export class AuthController {
     this.defaultRole = environment.AUTH_DEFAULT_ROLE || 'auditor';
     this.groupsClaim = environment.AUTH_GROUPS_CLAIM || 'groups';
     this.roleClaim = environment.AUTH_ROLE_CLAIM || 'aidecepticon_role';
+    this.organizationsClaim = environment.AUTH_ORGANIZATIONS_CLAIM || 'aidecepticon_organizations';
+    this.defaultOrganizationIds = normalizeOrganizationIds(environment.AUTH_DEFAULT_ORGANIZATION_ID || 'org-default');
     this.roleMappings = parseRoleMappings(environment.AUTH_ROLE_MAPPINGS);
     this.requireMfa = String(environment.AUTH_REQUIRE_MFA || 'false').toLowerCase() === 'true';
     this.controlPlaneApiKey = environment.CONTROL_PLANE_API_KEY || '';
     this.apiKeyPermissions = normalizeList(environment.CONTROL_PLANE_API_PERMISSIONS || '*');
+    this.apiKeyOrganizationIds = normalizeOrganizationIds(environment.CONTROL_PLANE_API_ORGANIZATIONS || environment.AUTH_DEFAULT_ORGANIZATION_ID || 'org-default');
     this.sessionEnabled = this.enabled || Boolean(this.controlPlaneApiKey);
     this.redisClient = null;
     this.oidcConfiguration = null;
@@ -175,7 +184,8 @@ export class AuthController {
       name: environment.AUTH_DEVELOPMENT_USER || 'Local administrator',
       email: environment.AUTH_DEVELOPMENT_EMAIL || 'local@aidecepticon.invalid',
       aidecepticon_role: 'platform_admin',
-    }, { provider: 'development', defaultRole: 'platform_admin', mfa: true });
+      aidecepticon_organizations: ['*'],
+    }, { provider: 'development', defaultRole: 'platform_admin', defaultOrganizationIds: ['*'], mfa: true });
     this.sessionMiddleware = this.sessionEnabled ? this.createSessionMiddleware() : null;
   }
 
@@ -311,6 +321,8 @@ export class AuthController {
       groupsClaim: this.groupsClaim,
       roleClaim: this.roleClaim,
       roleMappings: this.roleMappings,
+      organizationsClaim: this.organizationsClaim,
+      defaultOrganizationIds: this.defaultOrganizationIds,
       mfa: this.assertMfa(claims),
     });
   }
@@ -338,6 +350,17 @@ export class AuthController {
         next();
       });
     }
+
+    app.use((request, _response, next) => {
+      if (!request.user && this.controlPlaneApiKey && request.get('authorization')?.startsWith('Bearer ')) {
+        const token = request.get('authorization').slice(7);
+        if (safeEqual(token, this.controlPlaneApiKey)) {
+          request.user = this.apiKeyPrincipal();
+          request.authenticatedByBearer = true;
+        }
+      }
+      next();
+    });
 
     app.get('/api/v1/auth/config', (_request, response) => response.json({
       enabled: this.sessionEnabled,
@@ -401,6 +424,7 @@ export class AuthController {
           provider: 'api-key',
           mfa: false,
           permissions: this.apiKeyPermissions,
+          organizationIds: this.apiKeyOrganizationIds,
         };
         await this.establishSession(request, user);
         response.json({ user, permissions: this.apiKeyPermissions });
@@ -467,7 +491,7 @@ export class AuthController {
     });
 
     app.use((request, response, next) => {
-      if (!this.sessionEnabled || !request.user || !unsafeMethods.has(request.method) || request.path.startsWith('/api/v1/auth/')) return next();
+      if (!this.sessionEnabled || !request.user || request.authenticatedByBearer || !unsafeMethods.has(request.method) || request.path.startsWith('/api/v1/auth/')) return next();
       const origin = request.get('origin');
       if (origin && this.allowedOrigins.has(origin)) return next();
       response.status(403).json({ error: 'Request origin does not match the authenticated control-plane origin' });
@@ -480,7 +504,7 @@ export class AuthController {
         const token = request.get('authorization').slice(7);
         if (safeEqual(token, this.controlPlaneApiKey)) {
           if (this.apiKeyPermissions.includes('*') || this.apiKeyPermissions.includes(permission)) {
-            request.user = { id: 'control-plane-api-key', displayName: 'Control-plane API key', role: 'service', provider: 'api-key', mfa: true };
+            request.user = this.apiKeyPrincipal();
             return next();
           }
           return response.status(403).json({ error: `API credential lacks permission ${permission}` });
@@ -489,6 +513,20 @@ export class AuthController {
       if (!request.user) return response.status(401).json({ error: 'Authentication is required', loginUrl: '/api/v1/auth/login' });
       if (!hasPermission(request.user, permission)) return response.status(403).json({ error: `Role ${request.user.role} lacks permission ${permission}` });
       next();
+    };
+  }
+
+  apiKeyPrincipal() {
+    return {
+      id: 'control-plane-api-key',
+      email: '',
+      displayName: 'Control-plane API key',
+      role: 'service',
+      groups: [],
+      provider: 'api-key',
+      mfa: true,
+      permissions: this.apiKeyPermissions,
+      organizationIds: this.apiKeyOrganizationIds,
     };
   }
 

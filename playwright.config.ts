@@ -36,6 +36,7 @@ export default defineConfig({
         SENSOR_COMMAND_SIGNING_KEY: 'e2e-signing-key-with-at-least-32-random-bytes',
         CONTROL_PLANE_API_KEY: 'e2e-control-plane-key-with-at-least-32-bytes',
         CONTROL_PLANE_API_PERMISSIONS: '*',
+        CONTROL_PLANE_API_ORGANIZATIONS: '*',
         SESSION_SECRET: 'e2e-session-secret-with-at-least-32-random-bytes',
       },
     },

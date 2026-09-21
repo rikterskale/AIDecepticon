@@ -110,8 +110,23 @@ export interface AuthUser {
   displayName: string
   role: 'platform_admin' | 'deception_engineer' | 'analyst' | 'auditor' | 'service'
   groups: string[]
+  organizationIds: string[]
   provider: string
   mfa: boolean
+}
+
+export interface Organization {
+  id: string
+  name: string
+  slug: string
+  status: 'active' | 'suspended'
+  plan: string
+  createdAt: string
+}
+
+export interface OrganizationResponse {
+  items: Organization[]
+  activeOrganizationId: string
 }
 
 export interface AuthSession {
@@ -143,6 +158,7 @@ export interface AuditEvent {
   schemaVersion: number
   id: string
   occurredAt: string
+  organizationId: string | null
   actor: { id: string; displayName?: string; role?: string; provider?: string; mfa?: boolean }
   action: string
   target: { type: string; id: string }

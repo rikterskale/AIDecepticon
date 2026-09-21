@@ -21,6 +21,7 @@ describe('authentication and RBAC', () => {
       name: 'Deception Operator',
       email: 'operator@example.test',
       groups: ['SOC-Analysts', 'Deception-Admins'],
+      aidecepticon_organizations: ['org-default', 'org-managed-lab'],
     }, {
       provider: 'oidc',
       defaultRole: 'auditor',
@@ -31,6 +32,7 @@ describe('authentication and RBAC', () => {
     });
 
     expect(principal).toMatchObject({ id: 'user-123', role: 'platform_admin', provider: 'oidc' });
+    expect(principal.organizationIds).toEqual(['org-default', 'org-managed-lab']);
     expect(hasPermission(principal, 'sensor:write')).toBe(true);
   });
 
@@ -84,6 +86,7 @@ describe('authentication and RBAC', () => {
       get: () => 'Bearer scoped-test-key',
     }, response, allowedNext);
     expect(allowedNext).toHaveBeenCalledOnce();
+    expect(controller.apiKeyPrincipal().organizationIds).toEqual(['org-default']);
     expect(safeReturnTo('/surfaces')).toBe('/surfaces');
     expect(safeReturnTo('//attacker.example')).toBe('/');
     expect(safeReturnTo('https://attacker.example')).toBe('/');

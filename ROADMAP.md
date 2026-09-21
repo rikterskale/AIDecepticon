@@ -51,7 +51,7 @@ Status: **CI baseline implemented; release hardening in progress**
 
 ## Milestone 3 — Production control plane
 
-Status: **Persistence, resilient delivery, enterprise access control, and governance implemented**
+Status: **Persistence, resilient delivery, enterprise access control, tenancy, and governance implemented**
 
 - [x] PostgreSQL persistence with ordered, versioned schema migrations and safe single-runner migration locking.
 - [x] Redis-compatible sensor-command delivery queue with persistent source-of-truth recovery and local fallback.
@@ -60,7 +60,7 @@ Status: **Persistence, resilient delivery, enterprise access control, and govern
 - [x] Fine-grained RBAC for platform administrator, analyst, deception engineer, auditor, and scoped service roles.
 - [x] Encrypted secret storage with local AES-256-GCM, HashiCorp Vault Transit, and AWS KMS providers, key rotation, server-side verification, and a guided GUI.
 - [x] Append-only, HMAC-chained administrative and response audit trails with PostgreSQL mutation guards, automatic sensitive-field redaction, integrity verification, and a guided GUI.
-- [ ] Multi-tenancy and MSSP organization boundaries.
+- [x] Multi-tenancy and MSSP organization boundaries with identity/API-key membership scope, storage-enforced tenant filtering, immutable PostgreSQL ownership, tenant-bound sensors and secrets, tenant-filtered audit views, and a guided GUI switcher.
 - [ ] High availability, backups, disaster recovery, and zero-downtime upgrades.
 - [ ] Prometheus metrics, OpenTelemetry traces, structured logs, and service-level objectives.
 
@@ -151,9 +151,9 @@ Status: **Planned**
 
 ## Near-term delivery sequence
 
-1. Complete the projection-sensor exit criteria and publish signed preview binaries.
-2. Add PostgreSQL and the durable command queue before expanding fleet size.
-3. Add multi-tenancy boundaries, backup/restore automation, and control-plane observability.
+1. Finish controller-driven sensor upgrades, hardware-backed credentials, and automatic mTLS rotation.
+2. Add backup/restore automation, high-availability topology, and zero-downtime upgrade tests.
+3. Add Prometheus metrics, OpenTelemetry traces, structured logs, and service-level objectives.
 4. Deliver real endpoint token builders and one SIEM, one SOAR, and one EDR adapter.
 5. Implement multi-domain AD and AWS as the first identity and cloud controllers.
 6. Expand decoy protocols and AI-infrastructure deception behind the same sensor contract.

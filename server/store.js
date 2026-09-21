@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
-import { seedState } from './seed.js';
+import { defaultOrganizationId, seedState } from './seed.js';
 
 const { Pool } = pg;
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +16,40 @@ function assertResource(key) {
   if (!resourcePattern.test(key)) throw new Error(`Invalid store resource ${key}`);
 }
 
+function tenantRecord(item, organizationId) {
+  if (!organizationId) return item;
+  if (item.organizationId && item.organizationId !== organizationId) {
+    throw new Error('Record organization does not match the active organization');
+  }
+  return { ...item, organizationId };
+}
+
+function inOrganization(item, organizationId) {
+  return !organizationId || item.organizationId === organizationId;
+}
+
+function normalizeJsonState(state) {
+  let changed = false;
+  const normalized = { ...state };
+  const knownOrganizations = new Map((state.organizations || []).map((organization) => [organization.id, organization]));
+  for (const organization of seedState.organizations) {
+    if (!knownOrganizations.has(organization.id)) {
+      knownOrganizations.set(organization.id, clone(organization));
+      changed = true;
+    }
+  }
+  normalized.organizations = [...knownOrganizations.values()];
+  for (const [resource, items] of Object.entries(normalized)) {
+    if (resource === 'organizations' || !Array.isArray(items)) continue;
+    normalized[resource] = items.map((item) => {
+      if (item.organizationId) return item;
+      changed = true;
+      return { ...item, organizationId: defaultOrganizationId };
+    });
+  }
+  return { state: normalized, changed };
+}
+
 export class JsonStore {
   constructor(dataDirectory = process.env.DATA_DIR || './runtime-data') {
     this.mode = 'json';
@@ -23,7 +57,9 @@ export class JsonStore {
     this.statePath = path.join(this.dataDir, 'state.json');
     this.auditPath = path.join(this.dataDir, 'audit.ndjson');
     this.auditAppendQueue = Promise.resolve();
-    this.state = this.load();
+    const loaded = normalizeJsonState(this.load());
+    this.state = loaded.state;
+    if (loaded.changed) this.persist();
   }
 
   load() {
@@ -44,24 +80,32 @@ export class JsonStore {
 
   async init() {}
 
-  async read(key) {
+  async read(key, options = {}) {
     assertResource(key);
-    return clone(this.state[key] || []);
+    return clone((this.state[key] || []).filter((item) => inOrganization(item, options.organizationId)));
   }
 
-  async add(key, item) {
+  async add(key, item, options = {}) {
     assertResource(key);
-    this.state[key] = [item, ...(this.state[key] || [])];
+    const record = tenantRecord(item, options.organizationId);
+    const existing = (this.state[key] || []).find((candidate) => candidate.id === record.id);
+    if (existing && !inOrganization(existing, options.organizationId)) {
+      throw new Error('Record ID is already assigned to another organization');
+    }
+    this.state[key] = [record, ...(this.state[key] || [])];
     this.persist();
-    return clone(item);
+    return clone(record);
   }
 
-  async update(key, id, changes) {
+  async update(key, id, changes, options = {}) {
     assertResource(key);
     const collection = this.state[key] || [];
-    const index = collection.findIndex((item) => item.id === id);
+    const index = collection.findIndex((item) => item.id === id && inOrganization(item, options.organizationId));
     if (index === -1) return null;
-    collection[index] = { ...collection[index], ...changes };
+    if (changes.organizationId && changes.organizationId !== collection[index].organizationId) {
+      throw new Error('A record cannot be moved between organizations');
+    }
+    collection[index] = tenantRecord({ ...collection[index], ...changes }, options.organizationId);
     this.persist();
     return clone(collection[index]);
   }
@@ -78,10 +122,13 @@ export class JsonStore {
     return this.auditAppendQueue;
   }
 
-  async readAudit(limit = 100) {
+  async readAudit(limit = 100, options = {}) {
     try {
       const lines = fs.readFileSync(this.auditPath, 'utf8').split(/\r?\n/).filter(Boolean);
-      return lines.slice(-limit).reverse().map((line) => JSON.parse(line));
+      return lines.reverse()
+        .map((line) => JSON.parse(line))
+        .filter((event) => !options.organizationId || event.organizationId === options.organizationId)
+        .slice(0, limit);
     } catch (error) {
       if (error.code === 'ENOENT') return [];
       throw new Error(`Unable to load audit events from ${this.auditPath}: ${error.message}`);
@@ -143,7 +190,7 @@ export class PostgresStore {
   }
 
   async seed(client) {
-    const existing = await client.query('SELECT COUNT(*)::integer AS count FROM control_plane_records');
+    const existing = await client.query("SELECT COUNT(*)::integer AS count FROM control_plane_records WHERE resource_type <> 'organizations'");
     if (existing.rows[0].count > 0) return;
     await client.query('BEGIN');
     try {
@@ -162,36 +209,46 @@ export class PostgresStore {
     }
   }
 
-  async read(key) {
+  async read(key, options = {}) {
     assertResource(key);
     const result = await this.pool.query(
-      'SELECT payload FROM control_plane_records WHERE resource_type = $1 ORDER BY ordinal DESC',
-      [key],
+      `SELECT payload FROM control_plane_records
+       WHERE resource_type = $1
+         AND ($2::text IS NULL OR payload->>'organizationId' = $2)
+       ORDER BY ordinal DESC`,
+      [key, options.organizationId || null],
     );
     return result.rows.map((row) => row.payload);
   }
 
-  async add(key, item) {
+  async add(key, item, options = {}) {
     assertResource(key);
+    const record = tenantRecord(item, options.organizationId);
     const result = await this.pool.query(
       `INSERT INTO control_plane_records (resource_type, record_id, payload)
        VALUES ($1, $2, $3::jsonb)
        ON CONFLICT (resource_type, record_id)
        DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+       WHERE $4::text IS NULL OR control_plane_records.payload->>'organizationId' = $4
        RETURNING payload`,
-      [key, item.id, JSON.stringify(item)],
+      [key, record.id, JSON.stringify(record), options.organizationId || null],
     );
+    if (!result.rows[0]) throw new Error('Record ID is already assigned to another organization');
     return result.rows[0].payload;
   }
 
-  async update(key, id, changes) {
+  async update(key, id, changes, options = {}) {
     assertResource(key);
+    if (changes.organizationId && changes.organizationId !== options.organizationId) {
+      throw new Error('A record cannot be moved between organizations');
+    }
     const result = await this.pool.query(
       `UPDATE control_plane_records
        SET payload = payload || $3::jsonb, updated_at = NOW()
        WHERE resource_type = $1 AND record_id = $2
+         AND ($4::text IS NULL OR payload->>'organizationId' = $4)
        RETURNING payload`,
-      [key, id, JSON.stringify(changes)],
+      [key, id, JSON.stringify(changes), options.organizationId || null],
     );
     return result.rows[0]?.payload || null;
   }
@@ -218,10 +275,12 @@ export class PostgresStore {
     }
   }
 
-  async readAudit(limit = 100) {
+  async readAudit(limit = 100, options = {}) {
     const result = await this.pool.query(
-      'SELECT payload FROM administrative_audit_events ORDER BY sequence DESC LIMIT $1',
-      [Math.min(Math.max(Number(limit) || 100, 1), 10_000)],
+      `SELECT payload FROM administrative_audit_events
+       WHERE ($2::text IS NULL OR payload->>'organizationId' = $2)
+       ORDER BY sequence DESC LIMIT $1`,
+      [Math.min(Math.max(Number(limit) || 100, 1), 10_000), options.organizationId || null],
     );
     return result.rows.map((row) => row.payload);
   }

@@ -68,6 +68,7 @@ function actionFor(request) {
   if (path.includes('/auth/oidc/callback')) return 'authentication.oidc_callback';
   if (path.includes('/auth/saml/callback')) return 'authentication.saml_callback';
   if (path === '/api/v1/auth/logout') return 'authentication.logout';
+  if (path === '/api/v1/organizations') return 'organization.create';
   if (path === '/api/v1/deployments') return 'deception.deployment_create';
   if (/^\/api\/v1\/incidents\//.test(path)) return 'incident.update';
   if (path === '/api/v1/tokens') return 'deception.token_create';
@@ -122,9 +123,10 @@ export class AuditTrail {
   append(input) {
     const operation = () => this.store.appendAudit((previous) => {
       const event = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: input.id || `aud-${crypto.randomUUID()}`,
         occurredAt: input.occurredAt || new Date().toISOString(),
+        organizationId: input.organizationId || null,
         actor: input.actor,
         action: input.action,
         target: input.target,
@@ -145,9 +147,9 @@ export class AuditTrail {
     await this.pending;
   }
 
-  async list(limit = 100) {
+  async list(limit = 100, organizationId) {
     await this.flush();
-    return this.store.readAudit(Math.min(Math.max(Number(limit) || 100, 1), 1_000));
+    return this.store.readAudit(Math.min(Math.max(Number(limit) || 100, 1), 1_000), { organizationId });
   }
 
   async verify(limit = 10_000) {
@@ -182,6 +184,7 @@ export class AuditTrail {
         const segments = request.path.split('/').filter(Boolean);
         const targetId = response.locals.auditTargetId || segments.at(-1);
         void this.append({
+          organizationId: response.locals.auditOrganizationId || request.organization?.id || request.sensor?.organizationId || null,
           actor: actorFor(request),
           action: response.locals.auditAction || actionFor(request),
           target: { type: response.locals.auditTargetType || segments.at(-2) || 'control-plane', id: String(targetId || '') },

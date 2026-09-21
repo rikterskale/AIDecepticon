@@ -126,4 +126,22 @@ test.describe('guided operator journeys', () => {
     await expect(audit.getByText('Chain verified')).toBeVisible()
     await expect(audit.getByText('secret verify')).toBeVisible()
   })
+
+  test('creates and switches to an isolated MSSP organization through the GUI', async ({ page }) => {
+    const organizationName = `Managed tenant ${Date.now()}`
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Platform & API' }).click()
+    await page.locator('.organization-panel').getByRole('button', { name: 'Add organization' }).click()
+
+    const modal = page.getByRole('dialog', { name: 'Add organization' })
+    await modal.getByLabel('Organization name').fill(organizationName)
+    await modal.getByLabel('Operating model').selectOption('managed')
+    await modal.getByRole('button', { name: 'Create organization' }).click()
+
+    await expect(page.getByText(`${organizationName} is ready with an isolated workspace`)).toBeVisible()
+    await expect(page.getByLabel('Active organization').locator('option:checked')).toHaveText(organizationName)
+    await expect(page.locator('.organization-panel').getByText(organizationName)).toBeVisible()
+    await page.getByLabel('Active organization').selectOption({ label: 'AIDecepticon Demo' })
+    await expect(page.getByLabel('Active organization').locator('option:checked')).toHaveText('AIDecepticon Demo')
+  })
 })

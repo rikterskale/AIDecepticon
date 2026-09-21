@@ -34,9 +34,10 @@ function parseKeyring(environment) {
   }));
 }
 
-function contextFor(secretId, purpose) {
+function contextFor(secretId, purpose, organizationId) {
   return {
     application: 'AIDecepticon',
+    ...(organizationId ? { organizationId: String(organizationId) } : {}),
     purpose: String(purpose || 'control-plane-secret').slice(0, 100),
     secretId: String(secretId),
   };
@@ -230,9 +231,9 @@ export class SecretManager {
     else throw new Error('SECRET_PROVIDER must be local, vault-transit, or aws-kms');
   }
 
-  async seal(secretId, value, purpose) {
+  async seal(secretId, value, purpose, organizationId) {
     const plaintext = assertPlaintext(value);
-    const context = contextFor(secretId, purpose);
+    const context = contextFor(secretId, purpose, organizationId);
     const envelope = await this.provider.encrypt(plaintext, context);
     return {
       envelope,
@@ -240,16 +241,22 @@ export class SecretManager {
     };
   }
 
-  async unseal(secretId, envelope) {
+  async unseal(secretId, envelope, organizationId) {
     if (!envelope || envelope.format !== envelopeFormat || envelope.provider !== this.mode) {
       throw new Error(`Secret ${secretId} was encrypted by an unavailable or unsupported provider`);
     }
     if (envelope.context?.secretId !== secretId) throw new Error('Encrypted secret context does not match its record');
+    if (organizationId && envelope.context?.organizationId && envelope.context.organizationId !== organizationId) {
+      throw new Error('Encrypted secret context does not match the active organization');
+    }
+    if (organizationId && !envelope.context?.organizationId && organizationId !== 'org-default') {
+      throw new Error('Legacy encrypted secrets can only be opened inside the default organization');
+    }
     return (await this.provider.decrypt(envelope)).toString('utf8');
   }
 
-  async verify(secretId, envelope, fingerprint) {
-    await this.unseal(secretId, envelope);
+  async verify(secretId, envelope, fingerprint, organizationId) {
+    await this.unseal(secretId, envelope, organizationId);
     return envelopeFingerprint(envelope) === fingerprint;
   }
 

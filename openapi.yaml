@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AIDecepticon Control Plane API
   version: 0.1.0
-  description: API for managing deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, identity domains, and integrations.
+  description: API for managing organization-isolated deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, identity domains, and integrations. Operator endpoints use X-AIDecepticon-Organization to select an authorized organization.
   license:
     name: MIT
     identifier: MIT
@@ -101,13 +101,57 @@ paths:
       responses:
         '200': { description: SAML service-provider metadata }
         '404': { description: SAML is not configured }
+  /organizations:
+    get:
+      operationId: listOrganizations
+      summary: List organizations available to the authenticated identity
+      responses:
+        '200':
+          description: Accessible organizations and the active organization ID
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, activeOrganizationId]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Organization' }
+                  activeOrganizationId: { type: string, pattern: '^org-' }
+        '403': { description: Identity has no organization assignment }
+    post:
+      operationId: createOrganization
+      summary: Create an isolated enterprise or managed-customer organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 100 }
+                slug: { type: string, maxLength: 63 }
+                plan: { type: string, enum: [managed, enterprise, evaluation] }
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '403': { description: Organization creation requires platform-wide scope }
+        '409': { description: Organization slug already exists }
   /summary:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: getSummary
       summary: Read the command-center summary
       responses:
         '200': { description: Summary metrics }
   /deployments:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listDeployments
       summary: List deception deployments
@@ -134,6 +178,8 @@ paths:
         '201': { description: Deployment accepted }
         '400': { description: Invalid input }
   /tokens:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listTokens
       summary: List deception tokens
@@ -157,6 +203,8 @@ paths:
       responses:
         '201': { description: Token generated }
   /incidents:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listIncidents
       summary: List incidents
@@ -167,6 +215,7 @@ paths:
       operationId: updateIncident
       summary: Update incident workflow state
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - name: id
           in: path
           required: true
@@ -184,6 +233,8 @@ paths:
         '200': { description: Incident updated }
         '404': { description: Incident not found }
   /sensors:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listSensors
       summary: List projection sensors
@@ -197,6 +248,7 @@ paths:
         - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - name: status
           in: query
           schema: { type: string }
@@ -210,6 +262,7 @@ paths:
         - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - $ref: '#/components/parameters/CommandId'
       responses:
         '201': { description: Replacement command queued }
@@ -223,6 +276,7 @@ paths:
         - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - $ref: '#/components/parameters/CommandId'
       responses:
         '200': { description: Command dismissed }
@@ -235,6 +289,8 @@ paths:
       security:
         - controlPlaneSession: []
         - controlPlaneBearer: []
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
       requestBody:
         required: true
         content:
@@ -315,6 +371,7 @@ paths:
         - controlPlaneSession: []
         - controlPlaneBearer: []
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - $ref: '#/components/parameters/SensorId'
       requestBody:
         required: true
@@ -383,6 +440,8 @@ paths:
         '201': { description: Event and high-confidence incident created }
         '401': { description: Sensor authentication required }
   /secrets:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listEncryptedSecrets
       summary: List encrypted-secret metadata without ciphertext or plaintext
@@ -411,6 +470,7 @@ paths:
       operationId: rotateEncryptedSecret
       summary: Replace a secret with a newly encrypted value
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - $ref: '#/components/parameters/SecretId'
       requestBody:
         required: true
@@ -429,6 +489,7 @@ paths:
       operationId: verifyEncryptedSecret
       summary: Decrypt server-side and compare the secret integrity fingerprint
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - $ref: '#/components/parameters/SecretId'
       responses:
         '200': { description: Verification result without plaintext }
@@ -438,18 +499,23 @@ paths:
       operationId: listAdministrativeAuditEvents
       summary: List append-only audit events and verify the HMAC chain
       parameters:
+        - $ref: '#/components/parameters/OrganizationId'
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
       responses:
         '200': { description: Audit events and chain verification result }
   /domains:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listDomains
       summary: List protected identity domains
       responses:
         '200': { description: Domain collection }
   /integrations:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationId'
     get:
       operationId: listIntegrations
       summary: List security integrations
@@ -470,6 +536,16 @@ paths:
         '404': { description: Token not found }
 components:
   schemas:
+    Organization:
+      type: object
+      required: [id, name, slug, status, plan, createdAt]
+      properties:
+        id: { type: string, pattern: '^org-' }
+        name: { type: string }
+        slug: { type: string }
+        status: { type: string, enum: [active, suspended] }
+        plan: { type: string }
+        createdAt: { type: string, format: date-time }
     InfrastructureHealth:
       type: object
       required: [healthy, mode]
@@ -509,6 +585,12 @@ components:
       scheme: bearer
       description: Unique sensor access token returned once during enrollment.
   parameters:
+    OrganizationId:
+      name: X-AIDecepticon-Organization
+      in: header
+      required: false
+      description: Authorized organization to make active. The server selects the configured default when omitted.
+      schema: { type: string, pattern: '^org-' }
     SensorId:
       name: sensorId
       in: path

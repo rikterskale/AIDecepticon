@@ -12,12 +12,13 @@ let assertSensorSecurityConfiguration;
 let closeInfrastructure;
 const temporaryDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aidecepticon-sensor-api-'));
 
-async function request(route, { method = 'GET', token, body } = {}) {
+async function request(route, { method = 'GET', token, body, organizationId } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(organizationId ? { 'X-AIDecepticon-Organization': organizationId } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -80,6 +81,43 @@ describe('projection sensor control channel', () => {
     expect(audit.payload.verification.valid).toBe(true);
     expect(audit.payload.items.some((event) => event.action === 'secret.create' && event.target.id === created.payload.id)).toBe(true);
     expect(JSON.stringify(audit.payload)).not.toContain(value);
+  });
+
+  it('keeps control-plane data and audit views isolated by organization', async () => {
+    const organizations = await request('/api/v1/organizations');
+    expect(organizations.payload.items.map((organization) => organization.id)).toEqual(expect.arrayContaining(['org-default', 'org-managed-lab']));
+
+    const primaryName = `Primary ${crypto.randomUUID()}`;
+    const managedName = `Managed ${crypto.randomUUID()}`;
+    const primary = await request('/api/v1/secrets', {
+      method: 'POST',
+      organizationId: 'org-default',
+      body: { name: primaryName, type: 'api', value: 'primary-tenant-secret' },
+    });
+    const managed = await request('/api/v1/secrets', {
+      method: 'POST',
+      organizationId: 'org-managed-lab',
+      body: { name: managedName, type: 'api', value: 'managed-tenant-secret' },
+    });
+    expect(primary.response.status).toBe(201);
+    expect(managed.response.status).toBe(201);
+
+    const primaryList = await request('/api/v1/secrets', { organizationId: 'org-default' });
+    const managedList = await request('/api/v1/secrets', { organizationId: 'org-managed-lab' });
+    expect(primaryList.payload.items.some((secret) => secret.name === primaryName)).toBe(true);
+    expect(primaryList.payload.items.some((secret) => secret.name === managedName)).toBe(false);
+    expect(managedList.payload.items.some((secret) => secret.name === managedName)).toBe(true);
+    expect(managedList.payload.items.some((secret) => secret.name === primaryName)).toBe(false);
+
+    const crossTenantVerify = await request(`/api/v1/secrets/${managed.payload.id}/verify`, {
+      method: 'POST',
+      organizationId: 'org-default',
+      body: {},
+    });
+    expect(crossTenantVerify.response.status).toBe(404);
+
+    const primaryAudit = await request('/api/v1/audit-events', { organizationId: 'org-default' });
+    expect(primaryAudit.payload.items.some((event) => event.target.id === managed.payload.id)).toBe(false);
   });
 
   it('refuses an undersized production command-signing key', () => {

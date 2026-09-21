@@ -27,6 +27,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - Guided OIDC, SAML, or scoped API-key sign-in with server-side sessions, MFA-aware policy checks, and five enforceable RBAC roles.
 - GUI-managed encrypted provider credentials using local AES-256-GCM, HashiCorp Vault Transit, or AWS KMS without plaintext list/read endpoints.
 - Append-only HMAC-chained administrative audit events with sensitive-field redaction, PostgreSQL mutation guards, and continuous integrity verification.
+- MSSP-ready organization isolation across control-plane data, sensors, encrypted secrets, commands, and tenant-filtered audit views, with a guided organization switcher.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -103,6 +104,12 @@ OIDC uses Authorization Code with PKCE, state, and nonce validation. SAML requir
 
 `AUTH_ROLE_MAPPINGS` maps trusted IdP groups to `platform_admin`, `deception_engineer`, `analyst`, `auditor`, or `service`. Every management API route enforces its corresponding permission. A `CONTROL_PLANE_API_KEY` can also be limited with `CONTROL_PLANE_API_PERMISSIONS`; when external identity is disabled, operators can exchange that key for an HTTP-only GUI session on the guided sign-in screen.
 
+### Organizations and MSSP isolation
+
+Every tenant-owned record carries an immutable `organizationId`. The API resolves the active organization from `X-AIDecepticon-Organization`, verifies it against the authenticated identity, and applies the boundary inside both JSON and PostgreSQL storage operations. PostgreSQL also rejects attempts to remove or change a record's organization. Projection-sensor enrollment tokens carry the organization into the sensor identity, commands, telemetry, and derived incidents; secret encryption context and audit events are organization-bound as well.
+
+Set `AUTH_ORGANIZATIONS_CLAIM` to the trusted OIDC/SAML claim containing organization IDs. Users without that claim receive only `AUTH_DEFAULT_ORGANIZATION_ID`; platform administrators can operate across organizations. Scope service credentials with `CONTROL_PLANE_API_ORGANIZATIONS`. Operators can create and switch organizations through **Platform & API → Organizations** without using the CLI.
+
 ### Encrypted secrets and audit integrity
 
 **Platform & API → Secret vault** guides administrators through storing, rotating, and verifying integration, cloud, identity, response, and API credentials. Listing endpoints return only names, provider/key identifiers, and ciphertext fingerprints; no password-derived verifier is exposed. Verification decrypts inside the control plane and returns only an integrity result.
@@ -127,6 +134,7 @@ The live contract is available at `/openapi.yaml`.
 ```bash
 curl -X POST http://localhost:8787/api/v1/tokens \
   -H "Content-Type: application/json" \
+  -H "X-AIDecepticon-Organization: org-default" \
   -d '{"name":"Quarterly plan","type":"document","destination":"Finance endpoints"}'
 ```
 
@@ -135,6 +143,7 @@ Set `CONTROL_PLANE_API_KEY` outside local development to require `Authorization:
 Implemented resources include:
 
 - `GET /api/v1/health` and `GET /api/v1/summary`
+- `GET|POST /api/v1/organizations`
 - `GET|POST /api/v1/deployments`
 - `GET|POST /api/v1/tokens`
 - `GET|PATCH /api/v1/incidents`
@@ -166,7 +175,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment and secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment, organization switching, tenant isolation, secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 
@@ -176,7 +185,7 @@ AIDecepticon is for authorized defensive security operations. Deception artifact
 
 The complete milestone plan—including projection sensors, production control-plane work, endpoint delivery, SOC integrations, multi-domain AD, cloud controllers, decoy runtime breadth, AI/GenAI deception, and enterprise operations—is maintained in [ROADMAP.md](ROADMAP.md).
 
-The active milestone is production control-plane hardening: multi-tenancy boundaries, backup/restore automation, observability, and high-availability operations.
+The active milestone is production control-plane hardening: backup/restore automation, observability, and high-availability operations.
 
 ## License
 

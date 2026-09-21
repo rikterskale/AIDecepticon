@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { organizationScope } from './tenancy.js';
 
 const developmentSigningKey = 'aidecepticon-development-command-key-change-me';
 const allowedCommandTypes = new Set(['deploy_decoy', 'stop_decoy', 'snapshot']);
@@ -65,8 +66,8 @@ export function publicSensor(sensor) {
   return safeSensor;
 }
 
-export async function createSensorCommand(store, commandQueue, sensorId, input = {}) {
-  const sensor = (await store.read('sensors')).find((candidate) => candidate.id === sensorId);
+export async function createSensorCommand(store, commandQueue, sensorId, input = {}, scope = {}) {
+  const sensor = (await store.read('sensors', scope)).find((candidate) => candidate.id === sensorId);
   if (!sensor) return { error: 'Sensor not found', status: 404 };
   if (!allowedCommandTypes.has(input.type)) return { error: 'Unsupported sensor command type', status: 400 };
 
@@ -76,6 +77,7 @@ export async function createSensorCommand(store, commandQueue, sensorId, input =
   const command = {
     id: `cmd-${crypto.randomUUID().slice(0, 12)}`,
     sensorId,
+    organizationId: sensor.organizationId,
     type: input.type,
     payload: input.payload || {},
     issuedAt: issuedAt.toISOString(),
@@ -87,7 +89,7 @@ export async function createSensorCommand(store, commandQueue, sensorId, input =
     nextAttemptAt: issuedAt.toISOString(),
   };
   command.signature = signSensorCommand(command);
-  const persisted = await store.add('sensorCommands', command);
+  const persisted = await store.add('sensorCommands', command, { organizationId: sensor.organizationId });
   await commandQueue.enqueue(persisted);
   return { command: persisted };
 }
@@ -100,6 +102,7 @@ function authorizeSensor(store) {
       return response.status(401).json({ error: 'A valid sensor bearer token is required' });
     }
     request.sensor = sensor;
+    request.organization = { id: sensor.organizationId };
     next();
   };
 }
@@ -122,7 +125,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
 
   app.get('/api/v1/sensor-commands', requirePermission('sensor:read'), async (request, response) => {
     const requestedStatuses = String(request.query.status || '').split(',').map((status) => status.trim()).filter(Boolean);
-    const commands = await store.read('sensorCommands');
+    const commands = await store.read('sensorCommands', organizationScope(request));
     const items = requestedStatuses.length
       ? commands.filter((command) => requestedStatuses.includes(command.status))
       : commands;
@@ -130,7 +133,8 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
   });
 
   app.post('/api/v1/sensor-commands/:commandId/retry', requirePermission('sensor:write'), async (request, response) => {
-    const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
+    const scope = organizationScope(request);
+    const original = (await store.read('sensorCommands', scope)).find((command) => command.id === request.params.commandId);
     if (!original) return response.status(404).json({ error: 'Command not found' });
     if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be retried' });
     const result = await createSensorCommand(store, commandQueue, original.sensorId, {
@@ -138,24 +142,25 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       payload: original.payload,
       maxAttempts: original.maxAttempts,
       retryBackoffSeconds: original.retryBackoffSeconds,
-    });
+    }, scope);
     if (result.error) return response.status(result.status).json({ error: result.error });
     await store.update('sensorCommands', original.id, {
       status: 'retried',
       retriedAt: new Date().toISOString(),
       retriedAs: result.command.id,
-    });
+    }, scope);
     response.status(201).json(result.command);
   });
 
   app.post('/api/v1/sensor-commands/:commandId/dismiss', requirePermission('sensor:write'), async (request, response) => {
-    const original = (await store.read('sensorCommands')).find((command) => command.id === request.params.commandId);
+    const scope = organizationScope(request);
+    const original = (await store.read('sensorCommands', scope)).find((command) => command.id === request.params.commandId);
     if (!original) return response.status(404).json({ error: 'Command not found' });
     if (original.status !== 'dead_lettered') return response.status(409).json({ error: 'Only dead-lettered commands can be dismissed' });
     const dismissed = await store.update('sensorCommands', original.id, {
       status: 'dismissed',
       dismissedAt: new Date().toISOString(),
-    });
+    }, scope);
     await commandQueue.remove(original.sensorId, original.id);
     response.json(dismissed);
   });
@@ -171,7 +176,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + ttlMinutes * 60_000).toISOString(),
       usedAt: null,
-    });
+    }, organizationScope(request));
     response.status(201).json({ id: record.id, token, expiresAt: record.expiresAt });
   });
 
@@ -182,6 +187,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     if (!enrollment || enrollment.usedAt || Date.parse(enrollment.expiresAt) <= Date.now()) {
       return response.status(401).json({ error: 'Enrollment token is invalid, expired, or already used' });
     }
+    request.organization = { id: enrollment.organizationId };
 
     const requestedId = input.sensorId ? String(input.sensorId) : '';
     if (requestedId && !/^[a-zA-Z0-9._-]{3,64}$/.test(requestedId)) {
@@ -194,6 +200,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
 
     const accessToken = crypto.randomBytes(32).toString('base64url');
     const now = new Date().toISOString();
+    const scope = { organizationId: enrollment.organizationId };
     const sensor = await store.add('sensors', {
       id: sensorId,
       name: String(input.name || enrollment.label || sensorId).slice(0, 100),
@@ -210,8 +217,8 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       status: 'online',
       decoyCount: 0,
       accessTokenHash: hashSecret(accessToken),
-    });
-    await store.update('sensorEnrollmentTokens', enrollment.id, { usedAt: now, sensorId });
+    }, scope);
+    await store.update('sensorEnrollmentTokens', enrollment.id, { usedAt: now, sensorId }, scope);
 
     response.status(201).json({
       sensor: publicSensor(sensor),
@@ -224,6 +231,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
   app.post('/api/v1/sensors/:sensorId/heartbeat', requireSensor, async (request, response) => {
     const now = new Date().toISOString();
     const decoys = Array.isArray(request.body?.decoys) ? request.body.decoys.slice(0, 500) : [];
+    const scope = { organizationId: request.sensor.organizationId };
     const sensor = await store.update('sensors', request.params.sensorId, {
       health: Math.min(Math.max(Number(request.body?.health ?? 100), 0), 100),
       latency: Math.max(Number(request.body?.latency ?? 0), 0),
@@ -234,7 +242,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       status: 'online',
       decoyCount: decoys.length,
       decoys,
-    });
+    }, scope);
     const pendingCommands = await commandQueue.count(request.params.sensorId);
     response.json({ sensor: publicSensor(sensor), controllerTime: now, pendingCommands });
   });
@@ -246,13 +254,14 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
   });
 
   app.post('/api/v1/sensors/:sensorId/commands', requirePermission('sensor:write'), async (request, response) => {
-    const result = await createSensorCommand(store, commandQueue, request.params.sensorId, request.body);
+    const result = await createSensorCommand(store, commandQueue, request.params.sensorId, request.body, organizationScope(request));
     if (result.error) return response.status(result.status).json({ error: result.error });
     response.status(201).json(result.command);
   });
 
   app.post('/api/v1/sensors/:sensorId/commands/:commandId/ack', requireSensor, async (request, response) => {
-    const command = (await store.read('sensorCommands')).find((candidate) => candidate.id === request.params.commandId && candidate.sensorId === request.params.sensorId);
+    const scope = { organizationId: request.sensor.organizationId };
+    const command = (await store.read('sensorCommands', scope)).find((candidate) => candidate.id === request.params.commandId && candidate.sensorId === request.params.sensorId);
     if (!command) return response.status(404).json({ error: 'Command not found' });
     const status = request.body?.status === 'failed' ? 'failed' : 'acknowledged';
     const error = status === 'failed' ? String(request.body?.error || 'Sensor command failed').slice(0, 1000) : null;
@@ -263,7 +272,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
         acknowledgedAt: new Date().toISOString(),
         output: request.body?.output || null,
         error,
-      });
+      }, scope);
     if (status === 'acknowledged') await commandQueue.acknowledge(request.params.sensorId, command.id);
     response.json(updated);
   });
@@ -275,6 +284,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       return response.status(400).json({ error: 'decoyId and source are required' });
     }
     const timestamp = new Date().toISOString();
+    const scope = { organizationId: request.sensor.organizationId };
     const event = await store.add('sensorEvents', {
       id: `evt-${crypto.randomUUID().slice(0, 12)}`,
       sensorId: request.params.sensorId,
@@ -285,7 +295,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       destination: String(input.destination || '').slice(0, 200),
       metadata: input.metadata && typeof input.metadata === 'object' ? input.metadata : {},
       timestamp,
-    });
+    }, scope);
     const incident = await store.add('incidents', {
       id: `INC-${crypto.randomInt(3000, 9999)}`,
       severity: 'high',
@@ -301,7 +311,7 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
       steps: ['Connection accepted by decoy', 'Protocol metadata captured', 'High-confidence incident opened'],
       sensorId: request.params.sensorId,
       eventId: event.id,
-    });
+    }, scope);
     response.status(201).json({ event, incident });
   });
 }
