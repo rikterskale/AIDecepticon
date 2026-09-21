@@ -21,7 +21,7 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-session": "^1.19.0",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.47.0",
     "openid-client": "^6.8.8",
     "pg": "^8.23.0",
     "react": "^19.0.0",
