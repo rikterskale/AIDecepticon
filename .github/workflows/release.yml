@@ -37,7 +37,7 @@ jobs:
             asset: aidecepticon-sensor-darwin-arm64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: sensor/go.mod
           cache-dependency-path: sensor/go.mod
