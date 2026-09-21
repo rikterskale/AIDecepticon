@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: sensor/go.mod
-          cache-dependency-path: sensor/go.mod
+          cache: false
       - name: Test sensor
         working-directory: sensor
         run: go test ./...
