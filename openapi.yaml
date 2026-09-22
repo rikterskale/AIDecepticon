@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: AIDecepticon Control Plane API
   version: 0.1.0
-  description: API for managing organization-isolated deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, encrypted full-state backups, identity domains, and integrations. Operator endpoints use X-AIDecepticon-Organization to select an authorized organization; backup operations additionally require platform-wide scope.
+  description: API for managing organization-isolated deception deployments, sensors, tokens, incidents, encrypted secrets, audit events, encrypted full-state backups, controller topology, identity domains, and integrations. Operator endpoints use X-AIDecepticon-Organization to select an authorized organization; backup and controller operations additionally require platform-wide scope.
   license:
     name: MIT
     identifier: MIT
@@ -28,6 +28,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
+  /health/live:
+    get:
+      security: []
+      operationId: getLiveness
+      summary: Confirm that the controller process is alive
+      responses:
+        '200': { description: Controller process is alive }
+  /health/ready:
+    get:
+      security: []
+      operationId: getReadiness
+      summary: Confirm that this replica can receive traffic
+      description: Returns 503 while the controller is starting, draining, or unable to reach a required dependency.
+      responses:
+        '200': { description: Controller is ready for traffic }
+        '503': { description: Controller must be removed from load-balancer rotation }
   /auth/config:
     get:
       security: []
@@ -505,6 +521,42 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
       responses:
         '200': { description: Audit events and chain verification result }
+  /platform/instances:
+    get:
+      operationId: listControllerInstances
+      summary: List active control-plane replicas and leader state
+      description: Requires platform:read and platform-wide organization scope.
+      responses:
+        '200':
+          description: Controller membership and current-instance health
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ControllerTopology' }
+        '403': { description: Platform-wide scope is required }
+  /platform/instances/current/drain:
+    post:
+      operationId: drainCurrentController
+      summary: Remove the current replica from readiness and relinquish leadership
+      description: Requires platform:operate and platform-wide organization scope. Use before maintenance or replacement.
+      responses:
+        '200':
+          description: Current replica is draining
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ControllerTopology' }
+        '403': { description: Platform-wide scope is required }
+  /platform/instances/current/resume:
+    post:
+      operationId: resumeCurrentController
+      summary: Return the current replica to service
+      description: Requires platform:operate and platform-wide organization scope.
+      responses:
+        '200':
+          description: Current replica is ready for traffic
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ControllerTopology' }
+        '403': { description: Platform-wide scope is required }
   /backups:
     get:
       operationId: listBackups
@@ -647,18 +699,55 @@ components:
         sizeBytes: { type: integer, minimum: 1 }
     BackupHealth:
       type: object
-      required: [healthy, mode, enabled, scheduled, intervalHours, retentionCount]
+      required: [healthy, mode, enabled, scheduled, active, intervalHours, retentionCount]
       properties:
         healthy: { type: boolean }
         mode: { type: string, const: encrypted-full-state }
         enabled: { type: boolean }
         scheduled: { type: boolean }
+        active: { type: boolean, description: True only on the elected leader while its scheduler is running. }
         intervalHours: { type: number, minimum: 0 }
         retentionCount: { type: integer, minimum: 1 }
         restoring: { type: boolean }
         lastBackupAt: { type: [string, 'null'], format: date-time }
         nextRunAt: { type: [string, 'null'], format: date-time }
         error: { type: [string, 'null'] }
+    HighAvailabilityHealth:
+      type: object
+      required: [healthy, ready, mode, instanceId, leader, state, memberCount, heartbeatAt]
+      properties:
+        healthy: { type: boolean }
+        ready: { type: boolean }
+        mode: { type: string, enum: [single-instance, postgresql-advisory-lock] }
+        instanceId: { type: string }
+        leader: { type: boolean }
+        state: { type: string, enum: [ready, draining] }
+        memberCount: { type: integer, minimum: 0 }
+        heartbeatAt: { type: [string, 'null'], format: date-time }
+        zone: { type: string }
+        error: { type: string }
+    ControllerInstance:
+      type: object
+      required: [instanceId, version, zone, advertiseUrl, startedAt, heartbeatAt, state, status, leader, current]
+      properties:
+        instanceId: { type: string }
+        version: { type: string }
+        zone: { type: string }
+        advertiseUrl: { type: string }
+        startedAt: { type: string, format: date-time }
+        heartbeatAt: { type: [string, 'null'], format: date-time }
+        state: { type: string, enum: [ready, draining] }
+        status: { type: string, enum: [online, draining, stale] }
+        leader: { type: boolean }
+        current: { type: boolean }
+    ControllerTopology:
+      type: object
+      required: [items, current]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ControllerInstance' }
+        current: { $ref: '#/components/schemas/HighAvailabilityHealth' }
     Health:
       type: object
       required: [status, version, time, infrastructure]
@@ -668,7 +757,7 @@ components:
         time: { type: string, format: date-time }
         infrastructure:
           type: object
-          required: [storage, queue, scheduler, authentication, secrets, audit, backups]
+          required: [storage, queue, scheduler, authentication, secrets, audit, backups, highAvailability]
           properties:
             storage: { $ref: '#/components/schemas/InfrastructureHealth' }
             queue: { $ref: '#/components/schemas/InfrastructureHealth' }
@@ -677,6 +766,7 @@ components:
             secrets: { $ref: '#/components/schemas/InfrastructureHealth' }
             audit: { $ref: '#/components/schemas/InfrastructureHealth' }
             backups: { $ref: '#/components/schemas/BackupHealth' }
+            highAvailability: { $ref: '#/components/schemas/HighAvailabilityHealth' }
   securitySchemes:
     controlPlaneSession:
       type: apiKey

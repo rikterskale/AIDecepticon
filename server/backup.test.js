@@ -115,6 +115,17 @@ describe('encrypted backup and disaster recovery', () => {
     expect(retained.some((item) => item.id === newest.id)).toBe(true);
   });
 
+  it('activates and stops scheduled work independently of initialization', async () => {
+    const { backup } = jsonFixture(undefined, undefined, { BACKUP_SCHEDULE_INTERVAL_HOURS: '1' });
+    await backup.init();
+    expect(backup.health()).toMatchObject({ scheduled: true, active: false, nextRunAt: null });
+    backup.start();
+    expect(backup.health()).toMatchObject({ scheduled: true, active: true });
+    expect(backup.health().nextRunAt).not.toBeNull();
+    backup.stop();
+    expect(backup.health()).toMatchObject({ scheduled: true, active: false, nextRunAt: null });
+  });
+
   it.skipIf(!process.env.DATABASE_URL)('round-trips PostgreSQL state in an isolated schema', async () => {
     const schema = `backup_test_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
     const admin = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === 'require' ? { rejectUnauthorized: true } : undefined });

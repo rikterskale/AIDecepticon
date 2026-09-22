@@ -169,23 +169,29 @@ export class BackupService {
   async init() {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     this.lastBackup = (await this.list())[0] || null;
-    if (this.scheduleIntervalHours > 0) {
-      const intervalMs = this.scheduleIntervalHours * 60 * 60 * 1000;
-      this.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
-      this.timer = setInterval(() => {
-        void this.create({ reason: 'scheduled', createdBy: 'system:scheduler' })
-          .then(() => { this.lastError = null; })
-          .catch((error) => { this.lastError = error.message; })
-          .finally(() => { this.nextRunAt = new Date(Date.now() + intervalMs).toISOString(); });
-      }, intervalMs);
-      this.timer.unref?.();
-    }
   }
 
-  async close() {
+  start() {
+    if (this.timer || this.scheduleIntervalHours <= 0) return;
+    const intervalMs = this.scheduleIntervalHours * 60 * 60 * 1000;
+    this.nextRunAt = new Date(Date.now() + intervalMs).toISOString();
+    this.timer = setInterval(() => {
+      void this.create({ reason: 'scheduled', createdBy: 'system:scheduler' })
+        .then(() => { this.lastError = null; })
+        .catch((error) => { this.lastError = error.message; })
+        .finally(() => { this.nextRunAt = new Date(Date.now() + intervalMs).toISOString(); });
+    }, intervalMs);
+    this.timer.unref?.();
+  }
+
+  stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.nextRunAt = null;
+  }
+
+  async close() {
+    this.stop();
     await this.pending;
   }
 
@@ -365,6 +371,7 @@ export class BackupService {
       mode: 'encrypted-full-state',
       enabled: true,
       scheduled: this.scheduleIntervalHours > 0,
+      active: Boolean(this.timer),
       intervalHours: this.scheduleIntervalHours,
       retentionCount: this.retentionCount,
       restoring: this.restoring,

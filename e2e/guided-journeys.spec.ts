@@ -145,6 +145,29 @@ test.describe('guided operator journeys', () => {
     await expect(page.getByLabel('Active organization').locator('option:checked')).toHaveText('AIDecepticon Demo')
   })
 
+  test('drains and resumes a controller through the HA topology', async ({ page, request }) => {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Platform & API' }).click()
+    const topology = page.locator('.controller-topology-panel')
+    await expect(topology.getByRole('heading', { name: 'Controller topology' })).toBeVisible()
+    await expect(topology.getByText('Ready for traffic')).toBeVisible()
+
+    await topology.getByRole('button', { name: 'Drain traffic' }).click()
+    const drainDialog = page.getByRole('dialog', { name: 'Drain controller' })
+    await expect(drainDialog.getByText('Readiness will immediately return 503.')).toBeVisible()
+    await drainDialog.getByRole('button', { name: 'Drain controller' }).click()
+    await expect(page.getByText('This controller is drained and safe for maintenance')).toBeVisible()
+    await expect(topology.getByText('Not accepting new work')).toBeVisible()
+    const drainedProbe = await request.get('http://127.0.0.1:8787/api/v1/health/ready')
+    expect(drainedProbe.status()).toBe(503)
+
+    await topology.getByRole('button', { name: 'Resume instance' }).click()
+    await expect(page.getByText('This controller is ready for traffic')).toBeVisible()
+    await expect(topology.getByText('Ready for traffic')).toBeVisible()
+    const readyProbe = await request.get('http://127.0.0.1:8787/api/v1/health/ready')
+    expect(readyProbe.status()).toBe(200)
+  })
+
   test('creates and validates an encrypted recovery point through the GUI', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: 'Platform & API' }).click()

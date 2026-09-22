@@ -118,6 +118,32 @@ export class JsonStore {
     return clone(collection[index]);
   }
 
+  async updateIfStatus(key, id, expectedStatuses, changes, options = {}) {
+    assertResource(key);
+    const collection = this.state[key] || [];
+    const index = collection.findIndex((item) => item.id === id && inOrganization(item, options.organizationId));
+    if (index === -1 || !expectedStatuses.includes(collection[index].status)) return null;
+    if (changes.organizationId && changes.organizationId !== collection[index].organizationId) {
+      throw new Error('A record cannot be moved between organizations');
+    }
+    collection[index] = tenantRecord({ ...collection[index], ...changes }, options.organizationId);
+    this.persist();
+    return clone(collection[index]);
+  }
+
+  async claimSensorCommands(sensorId, statuses, predicate, changesFactory) {
+    const claimed = [];
+    const collection = this.state.sensorCommands || [];
+    for (let index = 0; index < collection.length; index += 1) {
+      const command = collection[index];
+      if (command.sensorId !== sensorId || !statuses.includes(command.status) || !predicate(command)) continue;
+      collection[index] = { ...command, ...changesFactory(command) };
+      claimed.push(clone(collection[index]));
+    }
+    if (claimed.length) this.persist();
+    return claimed;
+  }
+
   async appendAudit(factory) {
     const operation = async () => {
       const previous = (await this.readAudit(1))[0] || null;
@@ -283,6 +309,58 @@ export class PostgresStore {
       [key, id, JSON.stringify(changes), options.organizationId || null],
     );
     return result.rows[0]?.payload || null;
+  }
+
+  async updateIfStatus(key, id, expectedStatuses, changes, options = {}) {
+    assertResource(key);
+    if (changes.organizationId && changes.organizationId !== options.organizationId) {
+      throw new Error('A record cannot be moved between organizations');
+    }
+    const result = await this.pool.query(
+      `UPDATE control_plane_records
+       SET payload = payload || $3::jsonb, updated_at = NOW()
+       WHERE resource_type = $1 AND record_id = $2
+         AND ($4::text IS NULL OR payload->>'organizationId' = $4)
+         AND payload->>'status' = ANY($5::text[])
+       RETURNING payload`,
+      [key, id, JSON.stringify(changes), options.organizationId || null, expectedStatuses],
+    );
+    return result.rows[0]?.payload || null;
+  }
+
+  async claimSensorCommands(sensorId, statuses, predicate, changesFactory) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const candidates = await client.query(
+        `SELECT record_id, payload FROM control_plane_records
+         WHERE resource_type = 'sensorCommands'
+           AND payload->>'sensorId' = $1
+           AND payload->>'status' = ANY($2::text[])
+         ORDER BY ordinal ASC
+         FOR UPDATE SKIP LOCKED`,
+        [sensorId, statuses],
+      );
+      const claimed = [];
+      for (const row of candidates.rows) {
+        if (!predicate(row.payload)) continue;
+        const updated = await client.query(
+          `UPDATE control_plane_records
+           SET payload = payload || $2::jsonb, updated_at = NOW()
+           WHERE resource_type = 'sensorCommands' AND record_id = $1
+           RETURNING payload`,
+          [row.record_id, JSON.stringify(changesFactory(row.payload))],
+        );
+        if (updated.rows[0]) claimed.push(updated.rows[0].payload);
+      }
+      await client.query('COMMIT');
+      return claimed;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async appendAudit(factory) {

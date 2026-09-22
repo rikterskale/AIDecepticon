@@ -29,6 +29,7 @@ AIDecepticon is an open-source control plane for designing, deploying, and opera
 - Append-only HMAC-chained administrative audit events with sensitive-field redaction, PostgreSQL mutation guards, and continuous integrity verification.
 - MSSP-ready organization isolation across control-plane data, sensors, encrypted secrets, commands, and tenant-filtered audit views, with a guided organization switcher.
 - AES-256-GCM encrypted portable full-state backups with retention scheduling, authenticated integrity checks, automatic pre-restore checkpoints, JSON/PostgreSQL restore parity, and a guarded GUI workflow.
+- PostgreSQL-backed controller membership and advisory-lock leader election with liveness/readiness probes, single-leader background jobs, graceful shutdown drain, and GUI-operated maintenance controls.
 - Multi-domain AD posture, distributed sensor health, endpoint detection policy, and AI/agentic attack-sequence views.
 - SIEM, SOAR, EDR, and XDR integration catalog and response workflow surfaces.
 - Docker packaging with a persistent data volume.
@@ -127,6 +128,14 @@ Every administrative or response mutation is automatically redacted and appended
 
 Set `BACKUP_ENCRYPTION_KEYS` to a JSON keyring of exactly 32-byte base64 or hex keys and select the writer with `BACKUP_ENCRYPTION_KEY_ID`. Keep retired keys available while their archives remain. `BACKUP_RETENTION_COUNT` defaults to 14; set `BACKUP_SCHEDULE_INTERVAL_HOURS` above zero for in-process scheduling. Store `BACKUP_DIR` on durable storage separate from the encryption keyring, copy archives off-host, and regularly use **Validate** plus a non-production restore drill. Backups preserve encrypted secret envelopes, so the corresponding secret-provider keys and historical audit signing keys are also required after recovery.
 
+### Controller high availability
+
+With PostgreSQL enabled, every controller registers its membership and competes for a session-level advisory lock. All ready replicas can serve API and GUI traffic, while exactly one leader runs command-recovery sweeps and scheduled backups. Sensor commands use transactional row locks and compare-and-set finalization so concurrent replicas cannot claim the same delivery or resurrect an acknowledged command. Redis remains shared delivery acceleration; PostgreSQL remains the coordination and durable state authority. JSON mode deliberately operates as one controller and reports `single-instance` in the topology.
+
+Put `GET /api/v1/health/live` on the process-restart probe and `GET /api/v1/health/ready` on the load-balancer readiness probe. Before replacing a replica, route the operator to that instance and use **Platform & API → Controller topology → Drain traffic**. The controller immediately relinquishes leadership, stops leader-only schedulers, rejects new mutations, and returns 503 from readiness. After maintenance, **Resume instance** returns it to service. `SIGTERM` follows the same drain path and waits `SHUTDOWN_DRAIN_MS` before closing.
+
+Give every replica a stable, unique `CONTROLLER_INSTANCE_ID` and optional `CONTROLLER_ZONE`/`CONTROLLER_ADVERTISE_URL`. All replicas must share PostgreSQL, Redis, the same cryptographic keyrings, and a durable `BACKUP_DIR`; keep at least two PostgreSQL pool connections available per replica because leadership holds one dedicated session. The current slice establishes safe coordination and operator controls. Multi-node deployment manifests plus certified rolling upgrade, rollback, load-balancer failover, and chaos tests remain roadmap work.
+
 ## Operator journey
 
 1. Open **Command center** to review coverage, live signals, incident confidence, and sensor health.
@@ -134,7 +143,7 @@ Set `BACKUP_ENCRYPTION_KEYS` to a JSON keyring of exactly 32-byte base64 or hex 
 3. Use **Deception mesh → Canary tokens** to generate an instrumented file, credential, connection, cloud key, or API secret.
 4. Review touches in **Detections**, including the reconstructed sequence, confidence, MITRE ATT&CK mapping, and agentic-behavior assessment.
 5. Connect the response path in **Integrations**, then manage identity domains, endpoint policies, and sensors under **Protected surfaces**.
-6. Use **Platform & API** to protect provider credentials, verify the immutable administrative audit chain, and create or restore encrypted recovery points entirely through the GUI.
+6. Use **Platform & API** to protect provider credentials, inspect or drain controller replicas, verify the immutable administrative audit chain, and create or restore encrypted recovery points entirely through the GUI.
 
 ## API
 
@@ -151,7 +160,10 @@ Set `CONTROL_PLANE_API_KEY` outside local development to require `Authorization:
 
 Implemented resources include:
 
-- `GET /api/v1/health` and `GET /api/v1/summary`
+- `GET /api/v1/health`, `GET /api/v1/health/live`, `GET /api/v1/health/ready`, and `GET /api/v1/summary`
+- `GET /api/v1/platform/instances`
+- `POST /api/v1/platform/instances/current/drain`
+- `POST /api/v1/platform/instances/current/resume`
 - `GET|POST /api/v1/organizations`
 - `GET|POST /api/v1/deployments`
 - `GET|POST /api/v1/tokens`
@@ -188,7 +200,7 @@ npm run test:e2e
 npm run build
 ```
 
-The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment, organization switching, tenant isolation, secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, encrypted backup tamper detection and JSON/PostgreSQL restoration, PostgreSQL immutability guards, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
+The test suite verifies the command center, complete eight-class blueprint catalog, guided GUI deployment, organization switching, tenant isolation, secret-vault flows, envelope encryption providers, HMAC audit integrity and redaction, encrypted backup tamper detection and JSON/PostgreSQL restoration, PostgreSQL leader election and drain failover, health probes, enrollment lifecycle, command signing, sensor telemetry, retry/dead-letter recovery, cross-language signing compatibility, migrations, and Redis-backed command delivery.
 
 ## Safety and scope
 
@@ -198,7 +210,7 @@ AIDecepticon is for authorized defensive security operations. Deception artifact
 
 The complete milestone plan—including projection sensors, production control-plane work, endpoint delivery, SOC integrations, multi-domain AD, cloud controllers, decoy runtime breadth, AI/GenAI deception, and enterprise operations—is maintained in [ROADMAP.md](ROADMAP.md).
 
-The active milestone is production control-plane hardening: observability, high-availability topology, and zero-downtime upgrades.
+The active milestone is production control-plane hardening: observability plus multi-node deployment and zero-downtime upgrade certification on the completed HA coordination foundation.
 
 ## License
 

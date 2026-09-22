@@ -31,6 +31,7 @@ beforeAll(async () => {
   process.env.DATA_DIR = temporaryDataDir;
   process.env.SENSOR_COMMAND_SIGNING_KEY = 'test-signing-key-with-at-least-32-bytes';
   process.env.AUDIT_SIGNING_KEY = 'audit-test-key-with-at-least-32-bytes';
+  process.env.BACKUP_SCHEDULE_INTERVAL_HOURS = '1';
   const [{ app, initializeInfrastructure, closeInfrastructure: close }, sensorApi] = await Promise.all([import('./index.js'), import('./sensor-api.js')]);
   verifySensorCommand = sensorApi.verifySensorCommand;
   assertSensorSecurityConfiguration = sensorApi.assertSensorSecurityConfiguration;
@@ -55,10 +56,45 @@ describe('projection sensor control channel', () => {
     expect(health.payload.status).toBe('ok');
     expect(health.payload.infrastructure.storage.mode).toBe(process.env.DATABASE_URL ? 'postgresql' : 'json');
     expect(health.payload.infrastructure.queue.mode).toBe(process.env.REDIS_URL ? 'redis' : 'store');
-    expect(health.payload.infrastructure.scheduler).toMatchObject({ healthy: true, mode: 'scheduled' });
+    expect(health.payload.infrastructure.scheduler).toMatchObject({ healthy: true, mode: 'scheduled', active: true });
     expect(health.payload.infrastructure.authentication).toMatchObject({ healthy: true, mode: 'disabled' });
     expect(health.payload.infrastructure.secrets).toMatchObject({ healthy: true, mode: 'local' });
     expect(health.payload.infrastructure.audit).toMatchObject({ healthy: true, mode: 'hmac-sha256-chain', valid: true });
+    expect(health.payload.infrastructure.backups).toMatchObject({ healthy: true, scheduled: true, active: true });
+    expect(health.payload.infrastructure.highAvailability).toMatchObject({ healthy: true, ready: true, mode: process.env.DATABASE_URL ? 'postgresql-advisory-lock' : 'single-instance' });
+  });
+
+  it('exposes probes and guides the current controller through drain and resume', async () => {
+    const live = await request('/api/v1/health/live');
+    expect(live.response.status).toBe(200);
+    expect(live.payload.status).toBe('alive');
+    const ready = await request('/api/v1/health/ready');
+    expect(ready.response.status).toBe(200);
+    expect(ready.payload.status).toBe('ready');
+
+    const topology = await request('/api/v1/platform/instances');
+    expect(topology.response.status).toBe(200);
+    expect(topology.payload.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ current: true, status: 'online' }),
+    ]));
+
+    const drained = await request('/api/v1/platform/instances/current/drain', { method: 'POST', body: {} });
+    expect(drained.response.status).toBe(200);
+    expect(drained.payload.current).toMatchObject({ ready: false, leader: false, state: 'draining' });
+    const unavailable = await request('/api/v1/health/ready');
+    expect(unavailable.response.status).toBe(503);
+    expect(unavailable.payload.status).toBe('not_ready');
+    const drainedHealth = await request('/api/v1/health');
+    expect(drainedHealth.payload.infrastructure.scheduler.active).toBe(false);
+    expect(drainedHealth.payload.infrastructure.backups.active).toBe(false);
+
+    const resumed = await request('/api/v1/platform/instances/current/resume', { method: 'POST', body: {} });
+    expect(resumed.response.status).toBe(200);
+    expect(resumed.payload.current).toMatchObject({ ready: true, leader: true, state: 'ready' });
+    expect((await request('/api/v1/health/ready')).response.status).toBe(200);
+    const resumedHealth = await request('/api/v1/health');
+    expect(resumedHealth.payload.infrastructure.scheduler.active).toBe(true);
+    expect(resumedHealth.payload.infrastructure.backups.active).toBe(true);
   });
 
   it('stores encrypted secrets and exposes only verified metadata', async () => {

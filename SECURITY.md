@@ -20,6 +20,8 @@ Please do not disclose security issues through a public issue. Use GitHub's priv
 - Ship `administrative_audit_events` to immutable external retention. PostgreSQL triggers block application-level updates, deletes, and truncation, while the HMAC chain exposes offline tampering.
 - Use HTTPS for authenticated deployments. SAML POST binding always requires HTTPS and OIDC production startup rejects an HTTP public URL.
 - Store encrypted archives off-host and separately from `BACKUP_ENCRYPTION_KEYS`. Validate them regularly, preserve every referenced secret-provider and audit-signing key, and test full restoration in an isolated environment before expanding the sensor fleet. Redis is delivery acceleration and session state; PostgreSQL or JSON remains the durable control-plane source of truth.
+- Use PostgreSQL for every multi-controller deployment, assign stable unique controller instance IDs, and place only `/api/v1/health/ready` replicas in load-balancer rotation. Share Redis, cryptographic keyrings, and durable backup storage across replicas; do not attempt multi-controller operation with the JSON store.
+- Drain a controller in the GUI before maintenance and verify readiness returns 503 before stopping it. Scope load-balancer or administrative routing so the drain request reaches the intended replica; `SIGTERM` performs the same bounded drain automatically.
 - Never embed live production credentials in a deception asset.
 - Deny decoys outbound access except for the explicit telemetry channel to the control plane.
 - Run projected workloads in isolated networks, namespaces, accounts, or subscriptions with no route back into production.

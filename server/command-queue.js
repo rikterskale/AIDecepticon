@@ -106,6 +106,26 @@ export class SensorCommandQueue {
   }
 
   async dispatch(sensorId) {
+    if (typeof this.store.claimSensorCommands === 'function') {
+      const now = Date.now();
+      const claimed = await this.store.claimSensorCommands(
+        sensorId,
+        [...deliverableStatuses],
+        (command) => isDeliverable(command, now),
+        (command) => {
+          const attempts = Number(command.attempts || 0) + 1;
+          const dispatchedAt = new Date(now);
+          return {
+            status: 'dispatched',
+            attempts,
+            lastDispatchedAt: dispatchedAt.toISOString(),
+            nextAttemptAt: new Date(now + retryDelayMilliseconds({ ...command, attempts })).toISOString(),
+          };
+        },
+      );
+      await Promise.all(claimed.map((command) => this.remove(sensorId, command.id)));
+      return claimed;
+    }
     const commands = await this.pending(sensorId);
     const dispatched = [];
     for (const command of commands) {
@@ -127,20 +147,26 @@ export class SensorCommandQueue {
     const attempts = Number(command.attempts || 0);
     const maxAttempts = Number(command.maxAttempts || 3);
     if (attempts >= maxAttempts || timestamp(command.expiresAt) <= Date.now()) {
-      const dead = await this.store.update('sensorCommands', command.id, {
+      const changes = {
         status: 'dead_lettered',
         deadLetteredAt: new Date().toISOString(),
         deadLetterReason: attempts >= maxAttempts ? 'attempt_limit' : 'expired',
         error: errorMessage,
-      });
-      await this.remove(command.sensorId, command.id);
+      };
+      const dead = typeof this.store.updateIfStatus === 'function'
+        ? await this.store.updateIfStatus('sensorCommands', command.id, ['dispatched', 'retrying'], changes)
+        : await this.store.update('sensorCommands', command.id, changes);
+      if (dead) await this.remove(command.sensorId, command.id);
       return dead;
     }
-    const retrying = await this.store.update('sensorCommands', command.id, {
+    const changes = {
       status: 'retrying',
       error: errorMessage,
       nextAttemptAt: command.nextAttemptAt || new Date(Date.now() + retryDelayMilliseconds(command)).toISOString(),
-    });
+    };
+    const retrying = typeof this.store.updateIfStatus === 'function'
+      ? await this.store.updateIfStatus('sensorCommands', command.id, ['dispatched', 'retrying'], changes)
+      : await this.store.update('sensorCommands', command.id, changes);
     if (retrying) await this.enqueue(retrying);
     return retrying;
   }
@@ -188,13 +214,16 @@ export class CommandScheduler {
       const commands = await this.store.read('sensorCommands');
       for (const command of commands) {
         if (['queued', 'retrying', 'dispatched'].includes(command.status) && timestamp(command.expiresAt) <= now) {
-          await this.store.update('sensorCommands', command.id, {
+          const changes = {
             status: 'dead_lettered',
             deadLetteredAt: new Date(now).toISOString(),
             deadLetterReason: 'expired',
             error: command.error || 'Command expired before acknowledgement',
-          });
-          await this.commandQueue.remove(command.sensorId, command.id);
+          };
+          const expired = typeof this.store.updateIfStatus === 'function'
+            ? await this.store.updateIfStatus('sensorCommands', command.id, ['queued', 'retrying', 'dispatched'], changes)
+            : await this.store.update('sensorCommands', command.id, changes);
+          if (expired) await this.commandQueue.remove(command.sensorId, command.id);
           continue;
         }
         if (command.status !== 'dispatched' || timestamp(command.nextAttemptAt, Number.POSITIVE_INFINITY) > now) continue;
@@ -220,6 +249,7 @@ export class CommandScheduler {
     return {
       healthy: !this.lastError,
       mode: 'scheduled',
+      active: Boolean(this.timer),
       lastRunAt: this.lastRunAt,
       ...(this.lastError ? { error: this.lastError } : {}),
     };

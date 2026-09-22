@@ -64,4 +64,14 @@ describe('sensor command scheduler', () => {
     await scheduler.runOnce();
     expect(store.commands[0]).toMatchObject({ status: 'dead_lettered', deadLetterReason: 'expired' });
   });
+
+  it('reports whether leader-only recovery scheduling is active', () => {
+    const store = new MemoryStore([]);
+    const scheduler = new CommandScheduler(store, new SensorCommandQueue(store));
+    expect(scheduler.health()).toMatchObject({ healthy: true, active: false });
+    scheduler.start();
+    expect(scheduler.health()).toMatchObject({ healthy: true, active: true });
+    scheduler.close();
+    expect(scheduler.health()).toMatchObject({ healthy: true, active: false });
+  });
 });

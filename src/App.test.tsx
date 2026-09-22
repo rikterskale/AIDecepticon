@@ -16,6 +16,12 @@ describe('AIDecepticon control plane', () => {
           permissions: ['*'],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       }
+      if (String(input).includes('/api/v1/platform/instances')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          items: [{ instanceId: 'controller-test', version: '0.1.0', zone: 'test-zone', advertiseUrl: '', startedAt: '2026-09-21T12:00:00.000Z', heartbeatAt: '2026-09-21T12:00:05.000Z', state: 'ready', status: 'online', leader: true, current: true }],
+          current: { healthy: true, ready: true, mode: 'single-instance', instanceId: 'controller-test', leader: true, state: 'ready', memberCount: 1, heartbeatAt: '2026-09-21T12:00:05.000Z', zone: 'test-zone' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      }
       return Promise.reject(new Error('offline test'))
     }))
   })
@@ -63,6 +69,15 @@ describe('AIDecepticon control plane', () => {
     expect(screen.getByRole('dialog', { name: 'Add encrypted secret' })).toBeInTheDocument()
     expect(screen.getByText('Encrypted at rest')).toBeInTheDocument()
     expect(screen.getByText('No plaintext reads')).toBeInTheDocument()
+  })
+
+  it('shows the current controller and guided maintenance action', async () => {
+    render(<App />)
+    await screen.findByText('Make every attack path')
+    fireEvent.click(screen.getByRole('button', { name: 'Platform & API' }))
+    expect(await screen.findByRole('heading', { name: 'Controller topology' })).toBeInTheDocument()
+    expect(await screen.findByText('controller-test')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Drain traffic' })).toBeInTheDocument()
   })
 
   it('guides unauthenticated operators to enterprise sign-in', async () => {

@@ -118,7 +118,7 @@ function techniqueFor(protocol) {
   })[protocol] || 'T1046';
 }
 
-export function installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission }) {
+export function installSensorRoutes(app, { store, commandQueue, requirePermission }) {
   assertSensorSecurityConfiguration();
 
   const requireSensor = authorizeSensor(store);
@@ -248,7 +248,6 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
   });
 
   app.get('/api/v1/sensors/:sensorId/commands', requireSensor, async (request, response) => {
-    await commandScheduler.runOnce();
     const commands = await commandQueue.dispatch(request.params.sensorId);
     response.json({ items: commands });
   });
@@ -265,14 +264,21 @@ export function installSensorRoutes(app, { store, commandQueue, commandScheduler
     if (!command) return response.status(404).json({ error: 'Command not found' });
     const status = request.body?.status === 'failed' ? 'failed' : 'acknowledged';
     const error = status === 'failed' ? String(request.body?.error || 'Sensor command failed').slice(0, 1000) : null;
-    const updated = status === 'failed'
-      ? await commandQueue.fail(command, error)
-      : await store.update('sensorCommands', command.id, {
+    let updated;
+    if (status === 'failed') {
+      updated = await commandQueue.fail(command, error);
+    } else {
+      const changes = {
         status,
         acknowledgedAt: new Date().toISOString(),
         output: request.body?.output || null,
         error,
-      }, scope);
+      };
+      updated = typeof store.updateIfStatus === 'function'
+        ? await store.updateIfStatus('sensorCommands', command.id, ['dispatched', 'retrying'], changes, scope)
+        : await store.update('sensorCommands', command.id, changes, scope);
+    }
+    if (!updated) return response.status(409).json({ error: 'Command was already finalized by another controller operation' });
     if (status === 'acknowledged') await commandQueue.acknowledge(request.params.sensorId, command.id);
     response.json(updated);
   });

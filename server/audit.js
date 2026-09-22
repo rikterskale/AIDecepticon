@@ -83,6 +83,8 @@ function actionFor(request) {
   if (path === '/api/v1/backups') return 'backup.create';
   if (/\/backups\/[^/]+\/validate$/.test(path)) return 'backup.validate';
   if (/\/backups\/[^/]+\/restore$/.test(path)) return 'backup.restore';
+  if (path === '/api/v1/platform/instances/current/drain') return 'platform.instance_drain';
+  if (path === '/api/v1/platform/instances/current/resume') return 'platform.instance_resume';
   return `http.${request.method.toLowerCase()}`;
 }
 

@@ -191,6 +191,7 @@ export interface BackupHealth {
   mode: string
   enabled: boolean
   scheduled: boolean
+  active?: boolean
   intervalHours: number
   retentionCount: number
   restoring?: boolean
@@ -209,4 +210,35 @@ export interface BackupValidation extends BackupRecord {
   verification: { valid: boolean; checked: number; headHash?: string }
   secretKeyIds: string[]
   auditSigningKeyIds: string[]
+}
+
+export interface ControllerInstance {
+  instanceId: string
+  version: string
+  zone: string
+  advertiseUrl: string
+  startedAt: string
+  heartbeatAt: string | null
+  state: 'ready' | 'draining'
+  status: 'online' | 'draining' | 'stale'
+  leader: boolean
+  current: boolean
+}
+
+export interface HighAvailabilityHealth {
+  healthy: boolean
+  ready: boolean
+  mode: 'single-instance' | 'postgresql-advisory-lock'
+  instanceId: string
+  leader: boolean
+  state: 'ready' | 'draining'
+  memberCount: number
+  heartbeatAt: string | null
+  zone?: string
+  error?: string
+}
+
+export interface ControllerTopologyResponse {
+  items: ControllerInstance[]
+  current: HighAvailabilityHealth
 }

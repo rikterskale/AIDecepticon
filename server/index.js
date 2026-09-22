@@ -11,6 +11,7 @@ import { createSecretManager, publicSecret } from './secret-manager.js';
 import { createAuditTrail } from './audit.js';
 import { createTenancyController, hasPlatformScope, organizationScope } from './tenancy.js';
 import { createBackupService } from './backup.js';
+import { createHaCoordinator } from './ha.js';
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -21,9 +22,32 @@ const authController = createAuthController();
 const secretManager = createSecretManager();
 const auditTrail = createAuditTrail(store);
 const backupService = createBackupService(store, auditTrail);
+const haCoordinator = createHaCoordinator(store);
 const tenancyController = createTenancyController(store);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const distPath = path.resolve(here, '../dist');
+let infrastructureReady = false;
+let serviceSynchronization = Promise.resolve();
+
+async function synchronizeLeaderServices() {
+  if (haCoordinator.leader && !haCoordinator.draining) {
+    await commandScheduler.runOnce();
+    commandScheduler.start();
+    backupService.start();
+  } else {
+    commandScheduler.close();
+    backupService.stop();
+  }
+}
+
+function queueServiceSynchronization() {
+  const operation = () => synchronizeLeaderServices();
+  serviceSynchronization = serviceSynchronization.then(operation, operation)
+    .catch((error) => console.error(`Unable to synchronize leader services: ${error.message}`));
+  return serviceSynchronization;
+}
+
+haCoordinator.onChange(() => { void queueServiceSynchronization(); });
 
 app.disable('x-powered-by');
 app.use((_request, response, next) => {
@@ -37,11 +61,29 @@ app.use((_request, response, next) => {
   next();
 });
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) || false }));
+app.get('/api/v1/health/live', (_request, response) => response.json({ status: 'alive', version: '0.1.0', time: new Date().toISOString() }));
+app.get('/api/v1/health/ready', async (_request, response) => {
+  const [storage, queue] = await Promise.all([store.health(), commandQueue.health()]);
+  const authentication = authController.health();
+  const highAvailability = haCoordinator.health();
+  const ready = infrastructureReady && storage.healthy && queue.healthy && authentication.healthy && highAvailability.ready;
+  response.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    time: new Date().toISOString(),
+    instanceId: highAvailability.instanceId,
+    leader: highAvailability.leader,
+    state: highAvailability.state,
+  });
+});
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(auditTrail.middleware());
 authController.install(app);
 app.use((request, response, next) => {
+  const resumePath = '/api/v1/platform/instances/current/resume';
+  if (haCoordinator.draining && request.path !== resumePath && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+    return response.status(503).set('Retry-After', '5').json({ error: 'This controller instance is draining; retry through another ready instance' });
+  }
   if (backupService.restoring && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
     return response.status(503).set('Retry-After', '5').json({ error: 'A full-system restore is in progress; retry this mutation shortly' });
   }
@@ -49,7 +91,7 @@ app.use((request, response, next) => {
 });
 tenancyController.install(app, authController.requirePermission.bind(authController));
 
-installSensorRoutes(app, { store, commandQueue, commandScheduler, requirePermission: authController.requirePermission.bind(authController) });
+installSensorRoutes(app, { store, commandQueue, requirePermission: authController.requirePermission.bind(authController) });
 
 app.get('/api/v1/health', async (_request, response) => {
   const [storage, queue, audit] = await Promise.all([store.health(), commandQueue.health(), auditTrail.health()]);
@@ -57,19 +99,47 @@ app.get('/api/v1/health', async (_request, response) => {
   const authentication = authController.health();
   const secrets = secretManager.health();
   const backups = backupService.health();
-  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy && secrets.healthy && audit.healthy && backups.healthy;
+  const highAvailability = haCoordinator.health();
+  const healthy = storage.healthy && queue.healthy && scheduler.healthy && authentication.healthy && secrets.healthy && audit.healthy && backups.healthy && highAvailability.healthy;
   response.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
     version: '0.1.0',
     time: new Date().toISOString(),
-    infrastructure: { storage, queue, scheduler, authentication, secrets, audit, backups },
+    infrastructure: { storage, queue, scheduler, authentication, secrets, audit, backups, highAvailability },
   });
 });
 
 function requirePlatformScope(request, response, next) {
-  if (!hasPlatformScope(request.user)) return response.status(403).json({ error: 'Backup operations require platform-wide scope' });
+  if (!hasPlatformScope(request.user)) return response.status(403).json({ error: 'This operation requires platform-wide scope' });
   next();
 }
+
+app.get('/api/v1/platform/instances', authController.requirePermission('platform:read'), requirePlatformScope, async (_request, response) => {
+  response.set('Cache-Control', 'no-store');
+  response.json({ items: await haCoordinator.topology(), current: haCoordinator.health() });
+});
+
+app.post('/api/v1/platform/instances/current/drain', authController.requirePermission('platform:operate'), requirePlatformScope, async (_request, response) => {
+  await haCoordinator.setDraining(true);
+  await queueServiceSynchronization();
+  response.locals.auditAction = 'platform.instance_drain';
+  response.locals.auditTargetId = haCoordinator.instanceId;
+  response.locals.auditTargetType = 'controller-instance';
+  response.locals.auditOrganizationId = null;
+  response.set('Cache-Control', 'no-store');
+  response.json({ current: haCoordinator.health(), items: await haCoordinator.topology() });
+});
+
+app.post('/api/v1/platform/instances/current/resume', authController.requirePermission('platform:operate'), requirePlatformScope, async (_request, response) => {
+  await haCoordinator.setDraining(false);
+  await queueServiceSynchronization();
+  response.locals.auditAction = 'platform.instance_resume';
+  response.locals.auditTargetId = haCoordinator.instanceId;
+  response.locals.auditTargetType = 'controller-instance';
+  response.locals.auditOrganizationId = null;
+  response.set('Cache-Control', 'no-store');
+  response.json({ current: haCoordinator.health(), items: await haCoordinator.topology() });
+});
 
 app.get('/api/v1/backups', authController.requirePermission('backup:read'), requirePlatformScope, async (_request, response) => {
   response.set('Cache-Control', 'no-store');
@@ -119,8 +189,7 @@ app.post('/api/v1/backups/:id/restore', authController.requirePermission('backup
     response.set('Cache-Control', 'no-store');
     response.json(result);
   } finally {
-    await commandScheduler.runOnce().catch((error) => console.error(`Command recovery after restore failed: ${error.message}`));
-    commandScheduler.start();
+    await queueServiceSynchronization();
   }
 });
 
@@ -316,19 +385,26 @@ app.use((error, _request, response, _next) => {
 });
 
 let server;
+let shuttingDown = false;
 
 export async function initializeInfrastructure() {
   await Promise.all([store.init(), commandQueue.init(), authController.init()]);
   await backupService.init();
-  await commandScheduler.runOnce();
-  commandScheduler.start();
+  await haCoordinator.init();
+  await queueServiceSynchronization();
+  infrastructureReady = true;
 }
 
 export async function closeInfrastructure() {
-  commandScheduler.close();
+  infrastructureReady = false;
+  await haCoordinator.setDraining(true);
+  await queueServiceSynchronization();
   await backupService.close();
   await auditTrail.flush();
-  await Promise.allSettled([authController.close(), secretManager.close(), commandQueue.close(), store.close()]);
+  await haCoordinator.close();
+  await queueServiceSynchronization();
+  await Promise.allSettled([authController.close(), secretManager.close(), commandQueue.close()]);
+  await store.close();
 }
 
 export async function start() {
@@ -340,6 +416,14 @@ export async function start() {
 }
 
 async function shutdown() {
+  if (shuttingDown || !infrastructureReady) return;
+  shuttingDown = true;
+  infrastructureReady = false;
+  await haCoordinator.setDraining(true);
+  await queueServiceSynchronization();
+  const configuredDrain = Number(process.env.SHUTDOWN_DRAIN_MS ?? (process.env.NODE_ENV === 'production' ? 5_000 : 0));
+  const drainMilliseconds = Number.isFinite(configuredDrain) ? Math.min(Math.max(configuredDrain, 0), 30_000) : 5_000;
+  if (drainMilliseconds) await new Promise((resolve) => setTimeout(resolve, drainMilliseconds));
   if (server) await new Promise((resolve) => server.close(resolve));
   await closeInfrastructure();
 }
@@ -353,4 +437,4 @@ if (process.env.NODE_ENV !== 'test') {
   process.once('SIGINT', shutdown);
 }
 
-export { app, authController, tenancyController, secretManager, auditTrail, backupService, commandQueue, commandScheduler };
+export { app, authController, tenancyController, secretManager, auditTrail, backupService, haCoordinator, commandQueue, commandScheduler };

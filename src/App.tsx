@@ -37,6 +37,7 @@ import {
   Menu,
   Network,
   Plus,
+  Power,
   Radar,
   Radio,
   RefreshCw,
@@ -65,7 +66,7 @@ import {
   fallbackSensors,
   fallbackSummary,
 } from './data'
-import type { AuditResponse, AuthSession, BackupHealth, BackupRecord, BackupResponse, BackupValidation, Blueprint, BlueprintId, Deployment, Domain, Incident, Integration, Organization, OrganizationResponse, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
+import type { AuditResponse, AuthSession, BackupHealth, BackupRecord, BackupResponse, BackupValidation, Blueprint, BlueprintId, ControllerInstance, ControllerTopologyResponse, Deployment, Domain, HighAvailabilityHealth, Incident, Integration, Organization, OrganizationResponse, PageId, SecretRecord, Sensor, SensorCommand, Summary } from './types'
 
 type IconType = ComponentType<LucideProps>
 
@@ -456,7 +457,8 @@ function IntegrationsPage({ integrations, onToast }: { integrations: Integration
   )
 }
 
-function SystemPage({ sensors, auth, organizations, activeOrganizationId, secrets, audit, backups, backupHealth, onAddOrganization, onAddSecret, onRotateSecret, onVerifySecret, onCreateBackup, onValidateBackup, onDownloadBackup, onRestoreBackup, onToast }: { sensors: Sensor[]; auth: AuthSession; organizations: Organization[]; activeOrganizationId: string; secrets: SecretRecord[]; audit: AuditResponse; backups: BackupRecord[]; backupHealth: BackupHealth; onAddOrganization: () => void; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onCreateBackup: () => void; onValidateBackup: (backup: BackupRecord) => void; onDownloadBackup: (backup: BackupRecord) => void; onRestoreBackup: (backup: BackupRecord) => void; onToast: (message: string) => void }) {
+function SystemPage({ sensors, auth, organizations, activeOrganizationId, secrets, audit, backups, backupHealth, controllers, haHealth, onAddOrganization, onAddSecret, onRotateSecret, onVerifySecret, onCreateBackup, onValidateBackup, onDownloadBackup, onRestoreBackup, onDrainController, onResumeController, onToast }: { sensors: Sensor[]; auth: AuthSession; organizations: Organization[]; activeOrganizationId: string; secrets: SecretRecord[]; audit: AuditResponse; backups: BackupRecord[]; backupHealth: BackupHealth; controllers: ControllerInstance[]; haHealth: HighAvailabilityHealth; onAddOrganization: () => void; onAddSecret: () => void; onRotateSecret: (secret: SecretRecord) => void; onVerifySecret: (secret: SecretRecord) => void; onCreateBackup: () => void; onValidateBackup: (backup: BackupRecord) => void; onDownloadBackup: (backup: BackupRecord) => void; onRestoreBackup: (backup: BackupRecord) => void; onDrainController: () => void; onResumeController: () => void; onToast: (message: string) => void }) {
+  const [confirmDrain, setConfirmDrain] = useState(false)
   const curl = [
     `curl -X POST http://localhost:8787/api/v1/tokens \\`,
     `  -H "Content-Type: application/json" \\`,
@@ -471,6 +473,8 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
   const hasPlatformScope = auth.user?.role === 'platform_admin' || auth.user?.organizationIds?.includes('*')
   const canReadBackups = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('backup:read')))
   const canWriteBackups = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('backup:write')))
+  const canReadControllers = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('platform:read')))
+  const canOperateControllers = Boolean(hasPlatformScope && (auth.permissions.includes('*') || auth.permissions.includes('platform:operate')))
   return (
     <div className="system-layout">
       <section className="panel platform-health">
@@ -496,6 +500,24 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
           <div><span><Clipboard size={17} /></span><div><strong>Audit trail</strong><small>{canReadAudit ? (audit.verification.valid ? `${audit.verification.checked} events · chain verified` : 'Integrity verification needs attention') : 'Restricted to administrators and auditors'}</small></div><StatusPill status={canReadAudit && audit.verification.valid ? 'healthy' : 'learning'} /></div>
           <div><span><KeyRound size={17} /></span><div><strong>Encrypted secrets</strong><small>{canReadSecrets ? `${secrets.length} protected credentials · plaintext never listed` : 'Metadata access is restricted by role'}</small></div><ChevronRight size={16} /></div>
         </div>
+      </section>
+      <section className="panel controller-topology-panel">
+        <header className="panel__header"><div><span className="eyebrow">High availability</span><h3>Controller topology</h3></div><span className={cx('topology-mode', haHealth.mode === 'postgresql-advisory-lock' && 'distributed')}><Network size={14} />{haHealth.mode === 'postgresql-advisory-lock' ? 'Distributed coordination' : 'Single instance'}</span></header>
+        <p>Every ready replica can serve traffic. PostgreSQL elects one leader for scheduled recovery and backup work, while drain mode removes this instance from readiness before maintenance.</p>
+        {!canReadControllers
+          ? <div className="access-restricted"><LockKeyhole size={20} /><span><strong>Controller topology requires platform-wide scope</strong><small>Your role cannot inspect or operate control-plane replicas.</small></span></div>
+          : controllers.length === 0
+          ? <div className="vault-empty"><Server size={20} /><span><strong>Controller membership is unavailable</strong><small>Check control-plane health and PostgreSQL connectivity.</small></span></div>
+          : <div className="controller-list">{controllers.map((controller) => <article key={controller.instanceId} className={cx(controller.current && 'current', controller.status === 'stale' && 'stale')}>
+            <span className="controller-icon"><Server size={17} /></span>
+            <div className="controller-identity"><strong>{controller.instanceId}</strong><small>{controller.zone || 'Default zone'} · v{controller.version}{controller.current ? ' · This instance' : ''}</small></div>
+            <div className="controller-role"><b>{controller.leader ? 'Leader' : 'Replica'}</b><small>{controller.heartbeatAt ? `Heartbeat ${new Date(controller.heartbeatAt).toLocaleTimeString()}` : 'Awaiting heartbeat'}</small></div>
+            <StatusPill status={controller.status === 'online' ? 'healthy' : controller.status} />
+            {controller.current && canOperateControllers && (controller.state === 'draining'
+              ? <button className="button button--small" onClick={onResumeController}><Power size={13} /> Resume instance</button>
+              : <button className="button button--small controller-drain" onClick={() => setConfirmDrain(true)}><ArrowDownRight size={13} /> Drain traffic</button>)}
+          </article>)}</div>}
+        {canReadControllers && <footer className="topology-summary"><span><StatusDot tone={haHealth.ready ? 'healthy' : 'draining'} />{haHealth.ready ? 'Ready for traffic' : 'Not accepting new work'}</span><span>{haHealth.memberCount} active controller{haHealth.memberCount === 1 ? '' : 's'}</span><span>{haHealth.leader ? 'Leader services active here' : 'Leader services delegated'}</span></footer>}
       </section>
       <section className="panel organization-panel">
         <header className="panel__header"><div><span className="eyebrow">MSSP isolation</span><h3>Organizations</h3></div>{canManageOrganizations && <button className="button button--small" onClick={onAddOrganization}><Plus size={14} /> Add organization</button>}</header>
@@ -530,6 +552,7 @@ function SystemPage({ sensors, auth, organizations, activeOrganizationId, secret
           ? <div className="audit-empty"><Fingerprint size={20} /> Administrative actions will appear here with actor, outcome, and integrity proof.</div>
           : <div className="audit-list">{audit.items.slice(0, 8).map((event) => <article key={event.id}><span className={cx('audit-outcome', `audit-outcome--${event.outcome}`)}>{event.outcome === 'success' ? <Check size={13} /> : <AlertTriangle size={13} />}</span><div><strong>{event.action.replaceAll('.', ' ')}</strong><small>{event.actor.displayName || event.actor.id} · {event.target.type}:{event.target.id}</small></div><code>{event.hash.slice(0, 12)}</code><time>{new Date(event.occurredAt).toLocaleString()}</time></article>)}</div>}
       </section>
+      {confirmDrain && <div className="modal-backdrop"><section className="simple-modal controller-drain-modal" role="dialog" aria-modal="true" aria-label="Drain controller"><header><div className="modal-title-icon"><ArrowDownRight size={20} /></div><div><span className="eyebrow">Guided maintenance</span><h2>Drain this controller?</h2></div><button className="icon-button" aria-label="Cancel drain" onClick={() => setConfirmDrain(false)}><X size={18} /></button></header><div className="token-form"><div className="restore-warning"><AlertTriangle size={20} /><span><strong>Readiness will immediately return 503.</strong><small>The instance relinquishes leadership, stops scheduled jobs, and rejects new mutations. Existing reads can finish and Resume instance remains available.</small></span></div><div className="backup-restore-target"><span>Current controller</span><code>{haHealth.instanceId}</code><small>{haHealth.memberCount > 1 ? `${haHealth.memberCount - 1} other active replica${haHealth.memberCount === 2 ? '' : 's'} can receive traffic` : 'Single-instance mode · administrative writes pause until resumed'}</small></div><button className="button button--danger full" onClick={() => { setConfirmDrain(false); onDrainController() }}><ArrowDownRight size={16} /> Drain controller</button></div></section></div>}
     </div>
   )
 }
@@ -739,6 +762,8 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
   const [audit, setAudit] = useState<AuditResponse>({ items: [], verification: { valid: true, checked: 0 } })
   const [backups, setBackups] = useState<BackupRecord[]>([])
   const [backupHealth, setBackupHealth] = useState<BackupHealth>({ healthy: true, mode: 'encrypted-full-state', enabled: true, scheduled: false, intervalHours: 0, retentionCount: 14, lastBackupAt: null, nextRunAt: null })
+  const [controllers, setControllers] = useState<ControllerInstance[]>([])
+  const [haHealth, setHaHealth] = useState<HighAvailabilityHealth>({ healthy: false, ready: false, mode: 'single-instance', instanceId: '', leader: false, state: 'ready', memberCount: 0, heartbeatAt: null })
   const [restoreBackup, setRestoreBackup] = useState<BackupRecord | null>(null)
   const [secretModal, setSecretModal] = useState<{ open: boolean; existing?: SecretRecord }>({ open: false })
 
@@ -757,7 +782,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
     if (!activeOrganizationId) return
     setApiOrganization(activeOrganizationId)
     setSummary({ protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' })
-    setDeployments([]); setIncidents([]); setSensors([]); setDeadLetters([]); setDomains([]); setIntegrations([]); setSecrets([]); setAudit({ items: [], verification: { valid: true, checked: 0 } }); setBackups([])
+    setDeployments([]); setIncidents([]); setSensors([]); setDeadLetters([]); setDomains([]); setIntegrations([]); setSecrets([]); setAudit({ items: [], verification: { valid: true, checked: 0 } }); setBackups([]); setControllers([])
     Promise.all([
       apiGet<Summary>('summary', { protectedAssets: 0, activeDetections: 0, sensorsOnline: 0, totalSensors: 0, coverage: 0, meanTimeToDetect: '—' }),
       apiGet<{ items: Deployment[] }>('deployments', { items: [] }),
@@ -769,9 +794,10 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       apiGet<{ items: SecretRecord[] }>('secrets', { items: [] }),
       apiGet<AuditResponse>('audit-events?limit=50', { items: [], verification: { valid: true, checked: 0 } }),
       apiGet<BackupResponse>('backups', { items: [], health: { healthy: true, mode: 'encrypted-full-state', enabled: true, scheduled: false, intervalHours: 0, retentionCount: 14, lastBackupAt: null, nextRunAt: null } }),
-    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit, nextBackups]) => {
+      apiGet<ControllerTopologyResponse>('platform/instances', { items: [], current: { healthy: false, ready: false, mode: 'single-instance', instanceId: '', leader: false, state: 'ready', memberCount: 0, heartbeatAt: null } }),
+    ]).then(([nextSummary, nextDeployments, nextIncidents, nextSensors, nextDeadLetters, nextDomains, nextIntegrations, nextSecrets, nextAudit, nextBackups, nextControllers]) => {
       setSummary(nextSummary); setDeployments(nextDeployments.items); setIncidents(nextIncidents.items); setSensors(nextSensors.items); setDeadLetters(nextDeadLetters.items); setDomains(nextDomains.items); setIntegrations(nextIntegrations.items); setSecrets(nextSecrets.items); setAudit(nextAudit)
-      setBackups(nextBackups.items); setBackupHealth(nextBackups.health)
+      setBackups(nextBackups.items); setBackupHealth(nextBackups.health); setControllers(nextControllers.items); setHaHealth(nextControllers.current)
     })
   }, [activeOrganizationId])
 
@@ -844,6 +870,15 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
       setToast(`${backup.id} downloaded as an encrypted archive`)
     } catch (error) { setToast(error instanceof Error ? error.message : 'Backup download failed') }
   }
+  const setControllerState = async (action: 'drain' | 'resume') => {
+    try {
+      const topology = await apiPost<ControllerTopologyResponse>(`platform/instances/current/${action}`, {})
+      setControllers(topology.items)
+      setHaHealth(topology.current)
+      setToast(action === 'drain' ? 'This controller is drained and safe for maintenance' : 'This controller is ready for traffic')
+      await refreshAudit()
+    } catch (error) { setToast(error instanceof Error ? error.message : `Controller ${action} failed`) }
+  }
 
   return (
     <div className="app-shell">
@@ -881,7 +916,7 @@ function ControlPlaneApp({ auth, onLogout }: { auth: AuthSession; onLogout: () =
           {page === 'incidents' && <IncidentsPage incidents={incidents} onSelect={setSelectedIncident} />}
           {page === 'surfaces' && <SurfacesPage domains={domains} sensors={sensors} deadLetters={deadLetters} onDeploy={(blueprint) => setWizard({ open: true, blueprint })} onAddSensor={() => setSensorModal(true)} onRetryCommand={retryCommand} onDismissCommand={dismissCommand} />}
           {page === 'integrations' && <IntegrationsPage integrations={integrations} onToast={setToast} />}
-          {page === 'system' && <SystemPage sensors={sensors} auth={auth} organizations={organizations} activeOrganizationId={activeOrganizationId} secrets={secrets} audit={audit} backups={backups} backupHealth={backupHealth} onAddOrganization={() => setOrganizationModal(true)} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onCreateBackup={createBackup} onValidateBackup={validateBackup} onDownloadBackup={downloadBackup} onRestoreBackup={setRestoreBackup} onToast={setToast} />}
+          {page === 'system' && <SystemPage sensors={sensors} auth={auth} organizations={organizations} activeOrganizationId={activeOrganizationId} secrets={secrets} audit={audit} backups={backups} backupHealth={backupHealth} controllers={controllers} haHealth={haHealth} onAddOrganization={() => setOrganizationModal(true)} onAddSecret={() => setSecretModal({ open: true })} onRotateSecret={(secret) => setSecretModal({ open: true, existing: secret })} onVerifySecret={verifySecret} onCreateBackup={createBackup} onValidateBackup={validateBackup} onDownloadBackup={downloadBackup} onRestoreBackup={setRestoreBackup} onDrainController={() => void setControllerState('drain')} onResumeController={() => void setControllerState('resume')} onToast={setToast} />}
         </main>
       </div>
 
